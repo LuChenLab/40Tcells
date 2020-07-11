@@ -1,0 +1,465 @@
+---
+title: "Fig.3 Comparison of identified genes and transcripts"
+author: "Chao Tang"
+date: "9/25/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, fig.align='center')
+```
+
+# Content
+[A. Identified gene number](#A)    
+[B. Correlation between sequencing depth and identified genes](#B)    
+
+
+```{r}
+stopifnot(is.element("ggstatsplot", installed.packages()))
+```
+
+## Preparation
+```{r}
+library(data.table)
+suppressPackageStartupMessages(library(ggstatsplot))
+suppressPackageStartupMessages(library(GenomicAlignments))
+suppressPackageStartupMessages(library(ggpmisc))
+suppressPackageStartupMessages(library(ggpubr))
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+## A. Identified gene number{#A}
+
+### RSEM
+loading PolyA RNA
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+```
+
+filtering
+```{r}
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+PolyA_gene <- unique(substr(do.call(rbind, Gene_PolyA)[[1]], 1, 15))
+```
+
+loading Total RNA
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+```
+
+filtering
+```{r}
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+Total_gene <- unique(substr(do.call(rbind, Gene_Total)[[1]], 1, 15))
+```
+
+```{r message=FALSE}
+Mat <- rbind(data.frame(Gene = mapply(nrow, Gene_PolyA), Library = "PolyA"), data.frame(Gene = mapply(nrow, Gene_Total), Library = "Total"))
+
+library(ggpubr)
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes") -> p1
+
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(label = "p.format", comparisons = my_comparisons)+ # Add significance levelsaes(label = paste0("p = ", ..p.format..))
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes") -> p2
+# gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r message=FALSE}
+input = list(PolyA = PolyA_gene, Total = Total_gene)
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+library(ggplot2)
+library(ggforce)
+library(cowplot)
+ggplot() + geom_circle(aes(x0 = c(-1, 1), 
+                           y0 = c(0, 0), 
+                           r = c(2, 2), 
+                           color = c(col.p, col.t), 
+                           fill = c(col.p, col.t)), 
+                       lwd = 1.5, 
+                       alpha = .1)+
+  guides(color = F, fill = F, alpha = F)+
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() + 
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) + 
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6) -> p3
+```
+
+```{r fig.height=4, fig.width=8}
+ggstatsplot::combine_plots(
+  p1,
+  p3,
+  labels = c("(a)", "(b)"),
+  title.text = "RSEM identified gene",
+  caption.text = "expected_count >= 6 & TPM >= 0.1",
+  # title.color = "red",
+  caption.color = "blue"
+)
+```
+
+### HTSeq
+```{r}
+library(GenomicAlignments)
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+
+HTSeq_PolyA <- assay(se_PolyA)
+
+HTSeq_Total <- assay(se_Total)
+
+Mat <- rbind(data.frame(Gene = apply(HTSeq_PolyA, 2, function(x) sum(x >= 10)), Library = "PolyA"), data.frame(Gene = apply(HTSeq_Total, 2, function(x) sum(x >= 10)), Library = "Total"))
+```
+
+```{r}
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes") -> p4
+
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(label = "p.format", comparisons = my_comparisons)+ # Add significance levelsaes(label = paste0("p = ", ..p.format..))
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes") -> p5
+```
+
+```{r message=FALSE}
+input = list(PolyA = row.names(HTSeq_PolyA)[rowSums(HTSeq_PolyA >= 10) >= 1], Total = row.names(HTSeq_Total)[rowSums(HTSeq_Total >= 10) >= 1])
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+ggplot() + geom_circle(aes(x0 = c(-1, 1), 
+                           y0 = c(0, 0), 
+                           r = c(2, 2), 
+                           color = c(col.p, col.t), 
+                           fill = c(col.p, col.t)), 
+                       lwd = 1.5, 
+                       alpha = .1)+
+  guides(color = F, fill = F, alpha = F)+
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() + 
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) + 
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6) -> p6
+```
+
+```{r fig.height=4, fig.width=8}
+ggstatsplot::combine_plots(
+  p4,
+  p6,
+  labels = c("(a)", "(b)"),
+  title.text = "HTSeq identified gene",
+  caption.text = "raw counts >= 10",
+  # title.color = "red",
+  caption.color = "blue"
+)
+```
+
+## B. Correlation between sequencing depth and identified genes{#B}
+
+### RSEM
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+
+LibSize_PolyA <- mapply(Gene_PolyA, FUN = function(x) sum(x[[2]]))
+No.Gene_PolyA <- mapply(Gene_PolyA, FUN = function(x) nrow(x[expected_count >= 6 & TPM >= 0.1, ]))
+
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+
+LibSize_Total <- mapply(Gene_Total, FUN = function(x) sum(x[[2]]))
+No.Gene_Total <- mapply(Gene_Total, FUN = function(x) nrow(x[expected_count >= 6 & TPM >= 0.1, ]))
+
+Mat <- rbind(data.frame(Gene = No.Gene_PolyA, 
+                        LibSize = LibSize_PolyA, 
+                        Library = "PolyA"), 
+             data.frame(Gene = No.Gene_Total, 
+                        LibSize = LibSize_Total, 
+                        Library = "Total"))
+
+ggviolin(Mat, x = "Library", y = "LibSize", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "Sequencing Depth") -> p7
+
+library(ggpmisc)
+ggplot(Mat, aes(x = LibSize, y = Gene, color = Mat$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  # stat_poly_eq(formula = y ~ x,
+  #              aes(label = ..eq.label..),
+  #              label.y = "bottom", 
+  #              label.x = "right", 
+  #              size = 6,
+  #              parse = TRUE) +
+  stat_cor(data = Mat[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p8
+```
+
+```{r fig.height=4, fig.width=12}
+ggstatsplot::combine_plots(
+  p1,
+  p7,
+  p8, 
+  ncol = 3,
+  labels = c("(a)", "(b)", "(c)"),
+  title.text = "RSEM"
+  # caption.text = "raw reads >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+### HTSeq
+
+```{r}
+Mat <- rbind(data.frame(Gene = colSums(HTSeq_PolyA >= 10), 
+                        LibSize = colSums(HTSeq_PolyA), 
+                        Library = "PolyA"), 
+             data.frame(Gene = colSums(HTSeq_Total >= 10), 
+                        LibSize = colSums(HTSeq_Total), 
+                        Library = "Total"))
+```
+
+```{r}
+ggviolin(Mat, x = "Library", y = "LibSize", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "Sequencing Depth") -> p9
+
+ggplot(Mat, aes(x = LibSize, y = Gene, color = Mat$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  # stat_poly_eq(formula = y ~ x,
+  #              aes(label = ..eq.label..),
+  #              label.y = "bottom", 
+  #              label.x = "right", 
+  #              size = 6,
+  #              parse = TRUE) +
+  stat_cor(data = Mat[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p10
+```
+
+```{r fig.height=4, fig.width=12}
+ggstatsplot::combine_plots(
+  p4,
+  p9,
+  p10, 
+  ncol = 3,
+  labels = c("(a)", "(b)", "(c)"),
+  title.text = "HTSeq"
+  # caption.text = "raw reads >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+Here we used RSEM and HTSeq identified reads as sequencing depth respectively. Maybe we should use all STAR input reads as sequencing depth.
+
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".Log.final.out", sep = "")
+LibSize_PolyA <- mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[5, 2])), files_PolyA)
+
+files_Total <- paste(SampInfo_Total$ID , ".Log.final.out", sep = "")
+LibSize_Total <- mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[5, 2])), files_Total)
+```
+
+Sequencing depth difference between STAR input reads...
+```{r}
+mat <- rbind(data.frame(LibSize = LibSize_PolyA, 
+                        Library = "PolyA"), 
+             data.frame(LibSize = LibSize_Total, 
+                        Library = "Total"))
+
+ggviolin(mat, x = "Library", y = "LibSize", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "Sequencing Depth") -> p11
+```
+
+```{r}
+Mat <- rbind(data.frame(Gene = No.Gene_PolyA, 
+                        LibSize = LibSize_PolyA, 
+                        Library = "PolyA"), 
+             data.frame(Gene = No.Gene_Total, 
+                        LibSize = LibSize_Total, 
+                        Library = "Total"))
+
+ggplot(Mat, aes(x = LibSize, y = Gene, color = Mat$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  stat_cor(data = Mat[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p12
+
+Mat <- rbind(data.frame(Gene = colSums(HTSeq_PolyA >= 10), 
+                        LibSize = LibSize_PolyA, 
+                        Library = "PolyA"), 
+             data.frame(Gene = colSums(HTSeq_Total >= 10), 
+                        LibSize = LibSize_Total, 
+                        Library = "Total"))
+
+ggplot(Mat, aes(x = LibSize, y = Gene, color = Mat$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  stat_cor(data = Mat[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p13
+```
+
+```{r fig.height=5, fig.width=15}
+ggstatsplot::combine_plots(
+  p11,
+  p12,
+  p13, 
+  ncol = 3,
+  labels = c("(a)", "(b)", "(c)"),
+  title.text = "STAR input reads as sequencing depth",
+  caption.text = "(a): STAR input reads between different library methods; (b): Correlation between STAR input reads and RSEM identified gene numbers; (c): Correlation between STAR input reads and HTSeq identified gene numbers."
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+Identified gene numbers between RSEM and HTSeq.    
+Filter conditions:    
+RSEM: expected_count >= 6 & TPM >= 0.1    
+HTSeq: raw counts >= 10
+```{r}
+Mat_PolyA <- rbind(data.frame(Gene = No.Gene_PolyA, 
+                              Method = "RSEM"), 
+                   data.frame(Gene = colSums(HTSeq_PolyA >= 10), 
+                              Method = "HTSeq"))
+
+Mat_Total <- rbind(data.frame(Gene = No.Gene_Total, 
+                              Method = "RSEM"), 
+                   data.frame(Gene = colSums(HTSeq_Total >= 10), 
+                              Method = "HTSeq"))
+
+
+my_comparisons = list(c("RSEM", "HTSeq"))
+ggviolin(Mat_PolyA, x = "Method", y = "Gene", fill = "Method",
+         # palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes", title = "PolyA") -> p14
+
+ggviolin(Mat_Total, x = "Method", y = "Gene", fill = "Method",
+         # palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes", title = "Total") -> p15
+```
+
+```{r fig.height=4, fig.width=8}
+ggstatsplot::combine_plots(
+  p14,
+  p15,
+  ncol = 2,
+  labels = c("(a)", "(b)"),
+  title.text = "No. identified genes"
+  # caption.text = ""
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+
+
+
+
+
+

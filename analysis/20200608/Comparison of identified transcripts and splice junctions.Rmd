@@ -1,0 +1,615 @@
+---
+title: "Comparison of identified genes and transcripts"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+## Preparation
+```{r}
+library(data.table)
+suppressPackageStartupMessages(library(ggstatsplot))
+suppressPackageStartupMessages(library(GenomicAlignments))
+suppressPackageStartupMessages(library(ggpmisc))
+suppressPackageStartupMessages(library(ggpubr))
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+```{r}
+# Total 
+Files <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_Total$ID , ".SJ.out.tab", sep = "")
+stopifnot(all(file.exists(Files)))
+
+library(GenomicAlignments)
+mclapply(Files, function(x) {
+  sj <- BioHelper::readSTARJunctions(x)
+  sj <- sj[with(sj, mm_reads > 0 & overhang >= 3)]
+  return(sj)
+}, mc.cores = 16) -> SJ_list_Total
+
+# all.sj_Total <- unique(do.call(rbind, lapply(SJ_list_Total, function(x) x[, 1:6])))
+
+# PolyA 
+Files <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_PolyA$ID , ".SJ.out.tab", sep = "")
+stopifnot(all(file.exists(Files)))
+
+mclapply(Files, function(x) {
+  sj <- BioHelper::readSTARJunctions(x)
+  sj <- sj[with(sj, mm_reads > 0 & overhang >= 3)]
+  return(sj)
+}, mc.cores = 16) -> SJ_list_PolyA
+# all.sj_PolyA <- unique(do.call(rbind, lapply(SJ_list_PolyA, function(x) x[, 1:6])))
+```
+
+## No. junctions
+
+```{r fig.width=6, fig.height=6}
+Mat <- rbind(data.frame(SJ = mapply(length, SJ_list_PolyA), Library = "PolyA"), 
+             data.frame(SJ = mapply(length, SJ_list_Total), Library = "Total"))
+
+my_comparisons = list(c("PolyA", "Total"))
+
+options(scipen=-3)
+ggplot(Mat, aes(x = Library, y = SJ, fill = Library)) +
+  geom_violin() +
+  geom_boxplot(fill = "white", width = .1, outlier.shape = NA) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  scale_fill_manual(values = c(col.p, col.t)) + 
+  labs(y = "No. splice junctions") + 
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif") + # Add significance levels
+  stat_compare_means(label.x.npc = "center")
+
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Comparison of identified splice junctions.pdf", width = 6, height = 6)
+```
+
+
+## No. juction reads
+
+```{r}
+files_PolyA <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_PolyA$ID , ".Log.final.out", sep = "")
+files_Total <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_Total$ID , ".Log.final.out", sep = "")
+
+Mat <- rbind(data.frame(SJ = as.numeric(mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2])), files_PolyA)), Library = "PolyA"), 
+             data.frame(SJ = as.numeric(mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2])), files_Total)), Library = "Total"))
+
+my_comparisons = list(c("PolyA", "Total"))
+```
+
+```{r fig.width=6, fig.height=6}
+options(scipen=-3)
+ggplot(Mat, aes(x = Library, y = SJ, fill = Library)) +
+  geom_violin() +
+  geom_boxplot(fill = "white", width = .1, outlier.shape = NA) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  scale_fill_manual(values = c(col.p, col.t)) + 
+  labs(y = "No. splice junction reads") + 
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif") + # Add significance levels
+  stat_compare_means(label.x.npc = "center")
+
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Comparison of identified splice junction reads.pdf", width = 6, height = 6)
+```
+
+## Percentage of splice junction reads
+
+```{r}
+SJ_Perc_PolyA <- mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2]))/as.numeric(as.character(read.delim(x, header = F)[5, 2])), files_PolyA)
+SJ_Perc_Total <- mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2]))/as.numeric(as.character(read.delim(x, header = F)[5, 2])), files_Total)
+
+Mat <- rbind(data.frame(SJ = SJ_Perc_PolyA*100, Library = "PolyA"), data.frame(SJ = SJ_Perc_Total*100, Library = "Total"))
+
+my_comparisons = list(c("PolyA", "Total"))
+```
+
+```{r fig.width=6, fig.height=6}
+options(scipen=-3)
+ggplot(Mat, aes(x = Library, y = SJ, fill = Library)) +
+  geom_violin() +
+  geom_boxplot(fill = "white", width = .1, outlier.shape = NA) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  scale_fill_manual(values = c(col.p, col.t)) + 
+  labs(y = "No. splice junction reads") + 
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif") + # Add significance levels
+  stat_compare_means(label.x.npc = "center")
+
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Comparison of identified splice junction reads percentage.pdf", width = 6, height = 6)
+```
+
+## Intron motif
+
+```{r}
+intron_motif <- rbind(data.frame(reshape2::melt(mapply(function(x) prop.table(table(x$intron_motif))*100, SJ_list_PolyA)), Library = "PolyA"), 
+                      data.frame(reshape2::melt(mapply(function(x) prop.table(table(x$intron_motif))*100, SJ_list_Total)), Library = "Total"))
+
+suppressPackageStartupMessages(library(plyr))
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun = summary_func, varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+df2 <- data_summary(intron_motif, varname = "value", groupnames = c("Library", "Var1"))
+```
+
+```{r}
+ggplot(df2, aes(x = Var1, y = value, fill = Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Intron motif", y = "Percentage")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12)) -> p
+
+tmp <- with(intron_motif, by(intron_motif, Var1, function(x) t.test(value ~ Library, data = x)))
+lab <- signif(sapply(tmp, function(x) x$p.value), 2)
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))) * .03
+
+
+p + ggplot2::annotate("text", x = 1:4,
+                    y = y0, 
+                    label = lab) -> p5
+
+plevel <- function(x) {
+  if(x < 1e-04) {
+    "****"
+  } else {
+    if(x < 0.001) {
+      "***"
+    } else {
+      if(x < 0.01) {
+        "**"
+      } else {
+        if(x < 0.05) {
+          "*"
+        } else {
+          "ns"
+        }
+      }
+    }
+  }
+}
+# sapply(lab, plevel)
+# p + ggplot2::annotate("text", x = 1:4, y = y0, label = sapply(lab, plevel))
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))[1:3]) * .03
+
+ggplot(df2[df2$Var1 != "GT-AG", ], aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Intron motif", y = "Percentage")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12)) + 
+  ggplot2::annotate("text", x = 1:3, y = y0[1:3], label = lab[1:3]) -> p6
+
+```
+
+```{r fig.width=8, fig.height=4}
+ggstatsplot::combine_plots(
+  p5,
+  p6,
+  ncol = 2
+  # title.text = "RSEM identified gene",
+  # caption.text = "expected_count >= 6 & TPM >= 0.1",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Intron motif.pdf", width = 10, height = 5)
+```
+
+## SJ venn {.tabset}
+
+```{r}
+VennFun <- function(input, col1 = NULL, col2 = NULL, sizeTitle = 6, sizeLabel = 4) {
+  lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+  lab2 <- length(intersect(input[[1]], input[[2]]))
+  lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+  
+  if(is.null(col1)) col1 <- RColorBrewer::brewer.pal(n = 3, name = "Dark2")[1]
+  if(is.null(col2)) col2 <- RColorBrewer::brewer.pal(n = 3, name = "Dark2")[2]
+  
+  ggplot() + ggforce::geom_circle(aes(x0 = c(-1, 1), 
+                             y0 = c(0, 0), 
+                             r = c(2, 2), 
+                             color = c(col1, col2), 
+                             fill = c(col1, col2)), 
+                         lwd = 1.5, 
+                         alpha = .1)+
+    guides(color = F, fill = F, alpha = F)+
+    scale_fill_manual(values = c(col1, col2)) +
+    scale_color_manual(values = c(col1, col2)) +
+    # theme_no_axes() + 
+    theme(line = element_blank(), 
+          axis.text = element_blank(), 
+          axis.title = element_blank(), 
+          panel.background = element_blank()) + 
+    # theme_nothing() + 
+    ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = sizeLabel) + 
+    ggplot2::annotate("text", x = c(-1, 1), y = 2.4, label = names(input), size = sizeTitle)
+}
+
+```
+
+### Union
+
+```{r}
+input = list(PolyA = Reduce(union, lapply(SJ_list_PolyA, as.character)), 
+             Total = Reduce(union, lapply(SJ_list_Total, as.character)))
+```
+
+```{r fig.width=3, fig.height=2.6}
+VennFun(input = input, col1 = col.p, col2 = col.t)
+ggsave("/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/SJ Venn union.pdf", width = 3, height = 2.6)
+```
+
+### Intersect
+
+```{r}
+input = list(PolyA = Reduce(intersect, lapply(SJ_list_PolyA, as.character)), 
+             Total = Reduce(intersect, lapply(SJ_list_Total, as.character)))
+```
+
+```{r fig.width=3, fig.height=2.6}
+VennFun(input = input, col1 = col.p, col2 = col.t)
+ggsave("/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/SJ Venn intersect.pdf", width = 3, height = 2.6)
+```
+
+## Motif compare {.tabset}
+
+### Union
+
+```{r}
+SJ_Total_Tab <- do.call(c, SJ_list_Total)
+SJ_Total_Tab$um_reads <- NULL
+SJ_Total_Tab$mm_reads <- NULL
+SJ_Total_Tab$overhang <- NULL
+SJ_Total_Tab <- unique(SJ_Total_Tab)
+
+SJ_PolyA_Tab <- do.call(c, SJ_list_PolyA)
+SJ_PolyA_Tab$um_reads <- NULL
+SJ_PolyA_Tab$mm_reads <- NULL
+SJ_PolyA_Tab$overhang <- NULL
+SJ_PolyA_Tab <- unique(SJ_PolyA_Tab)
+
+all_SJ <- unique(c(SJ_Total_Tab, SJ_PolyA_Tab))
+all_SJ_motif <- all_SJ$intron_motif
+names(all_SJ_motif) <- as.character(all_SJ)
+
+PolyA_SJ <- setdiff(as.character(SJ_PolyA_Tab), as.character(SJ_Total_Tab))
+Total_SJ <- setdiff(as.character(SJ_Total_Tab), as.character(SJ_PolyA_Tab))
+Share_SJ <- intersect(as.character(SJ_Total_Tab), as.character(SJ_PolyA_Tab))
+
+df <- rbind(data.frame(prop.table(table(all_SJ_motif[PolyA_SJ]))*100, Type = "PolyA-specific"), 
+            data.frame(prop.table(table(all_SJ_motif[Total_SJ]))*100, Type = "Total-specific"), 
+            data.frame(prop.table(table(all_SJ_motif[Share_SJ]))*100, Type = "Common"))
+df$Type <- factor(df$Type, levels = c("PolyA-specific", "Total-specific", "Common"))
+
+
+ggplot(df, aes(x = Var1, y = Freq, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position = position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = df$Freq[order(od)] + 3, label = round(df$Freq[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=5, fig.height=4}
+p17_2
+ggsave("/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Motif compare union.pdf", width = 5, height = 4)
+```
+
+### Intersect
+
+```{r}
+PolyA_SJ <- setdiff(Reduce(intersect, lapply(SJ_list_PolyA, as.character)), Reduce(intersect, lapply(SJ_list_Total, as.character)))
+Total_SJ <- setdiff(Reduce(intersect, lapply(SJ_list_Total, as.character)), Reduce(intersect, lapply(SJ_list_PolyA, as.character)))
+Share_SJ <- intersect(Reduce(intersect, lapply(SJ_list_Total, as.character)), Reduce(intersect, lapply(SJ_list_PolyA, as.character)))
+
+df <- rbind(data.frame(prop.table(table(all_SJ_motif[PolyA_SJ]))*100, Type = "PolyA-specific"), 
+            data.frame(prop.table(table(all_SJ_motif[Total_SJ]))*100, Type = "Total-specific"), 
+            data.frame(prop.table(table(all_SJ_motif[Share_SJ]))*100, Type = "Common"))
+df$Type <- factor(df$Type, levels = c("PolyA-specific", "Total-specific", "Common"))
+
+
+ggplot(df, aes(x = Var1, y = Freq, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position = position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = df$Freq[order(od)] + 3, label = round(df$Freq[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=5, fig.height=4}
+p17_2
+ggsave("/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Motif compare intersect.pdf", width = 5, height = 4)
+```
+
+## Isoform comparison
+
+```{r}
+### PolyA
+
+files_PolyA <- paste("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671/", SampInfo_PolyA$ID , ".isoforms.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Isoform_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+```
+
+```{r}
+Isoform_PolyA <- lapply(Isoform_PolyA, function(x) {x[expected_count >= 10, ]})
+PolyA_Isoform <- unique(do.call(rbind, Isoform_PolyA)[[1]])
+```
+
+```{r}
+### Total
+
+files_Total <- paste("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671/", SampInfo_Total$ID , ".isoforms.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Isoform_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+```
+
+```{r}
+Isoform_Total <- lapply(Isoform_Total, function(x) {x[expected_count >= 10, ]})
+Total_Isoform <- unique(do.call(rbind, Isoform_Total)[[1]])
+```
+
+### Venn {.tabset}
+
+#### Union
+
+```{r fig.width=3, fig.height=2.6, message=FALSE}
+input = list(PolyA = PolyA_Isoform, Total = Total_Isoform)
+VennFun(input = input, col1 = col.p, col2 = col.t)
+ggsave("/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Isoform Venn union.pdf", width = 3, height = 2.6)
+```
+
+#### Intersect
+
+```{r}
+input = list(PolyA = Reduce(intersect, lapply(Isoform_PolyA, function(x) x$transcript_id)), 
+             Total = Reduce(intersect, lapply(Isoform_Total, function(x) x$transcript_id)))
+```
+
+```{r fig.width=3, fig.height=2.6, message=FALSE}
+VennFun(input = input, col1 = col.p, col2 = col.t)
+ggsave("/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Isoform Venn intersect.pdf", width = 3, height = 2.6)
+```
+
+
+### Biotype {.tabset}
+```{r}
+gtf <- rtracklayer::readGFF("/mnt/raid61/Personal_data/tangchao/Document/gencode/human/GRCh37/gencode.v30lift37.annotation.gtf")
+setDT(gtf)
+gtf <- gtf[type == "transcript", .(seqid, type, start, end, strand, gene_id, gene_type, gene_name, transcript_id, transcript_type, transcript_name)]
+
+gtf[, ID:=paste(transcript_id, transcript_name, sep = "_")]
+setkey(gtf, ID)
+```
+
+#### Union
+
+```{r}
+input <- list(PolyA = Reduce(union, lapply(Isoform_PolyA, function(x) x$transcript_id)), 
+              Total = Reduce(union, lapply(Isoform_Total, function(x) x$transcript_id)))
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(transcript_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(transcript_type)])
+mat3 <- data.frame(gtf[Common_gene, table(transcript_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, transcript_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = transcript_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Transcript biotype of RSEM Union.pdf", width = 6, height = 5)
+```
+
+#### Intersect
+
+```{r}
+input <- list(PolyA = Reduce(intersect, lapply(Isoform_PolyA, function(x) x$transcript_id)), 
+              Total = Reduce(intersect, lapply(Isoform_Total, function(x) x$transcript_id)))
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(transcript_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(transcript_type)])
+mat3 <- data.frame(gtf[Common_gene, table(transcript_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, transcript_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = transcript_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Transcript biotype of RSEM Intersect.pdf", width = 6, height = 5)
+```
+
+### Heat scater 
+
+```{r}
+ggheatscatter <- function(x, y, xlab, ylab, title = NULL, subtitle = NULL) {
+  data <- data.frame(x = x, y = y)
+  ggplot(data = data, aes(x = x, y = y)) + 
+  geom_point(size = .1) +
+  stat_density2d(geom = "raster", aes(fill = ..density.., alpha = ..density..), contour = FALSE) +
+  scale_fill_viridis_c(guide = FALSE) +
+  scale_alpha_continuous(guide = "none", range = c(0, 1)) +
+  labs(x = xlab, y = ylab, title = title, subtitle = subtitle) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "none")
+}
+```
+
+
+```{r}
+stopifnot(identical(SampInfo_PolyA$donor_id, SampInfo_Total$donor_id))
+Tab <- merge(Isoform_PolyA[[2]], Isoform_Total[[2]], by = "transcript_id")[, .(TPM.x, TPM.y)]
+Tab <- setDF(Tab)
+colnames(Tab) <- c("PolyA", "Total")
+```
+
+```{r fig.width=5, fig.height=5}
+ggheatscatter(x = log1p(Tab$PolyA), y = log1p(Tab$Total), xlab = "PolyA", ylab = "Total", title = "RSEM", subtitle = "log1p(TPM)") + 
+  xlim(c(0, log1p(max(Tab)))) + 
+  ylim(c(0, log1p(max(Tab))))
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Scatter plot of RSEM transcript2.pdf", width = 6, height = 6)
+```
+

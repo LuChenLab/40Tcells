@@ -1,0 +1,592 @@
+---
+title: "Fig.6 eQTL analysis"
+author: "Chao Tang"
+date: "9/25/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r}
+stopifnot(is.element("ggstatsplot", installed.packages()))
+```
+
+### Content
+[A. QQ-plot](#A)    
+[B. Venn diagram](#B)    
+[C. Manhattan plot](#C)    
+[D. Box plot](#D)    
+
+
+
+
+### Preparation
+```{r}
+qqpoint = function(qtl){
+  m = qtl$cis
+  cnts = m$hist.counts;
+  bins = m$hist.bins;
+  ntst = m$ntests;
+  
+  cusu = cumsum(cnts) / ntst;
+  ypos = bins[-1][is.finite(cusu)];
+  xpos = cusu[is.finite(cusu)];
+  if(length(m$eqtls$pvalue)==0)
+    return();
+  ypvs = -log10(m$eqtls$pvalue);
+  xpvs = -log10(1:length(ypvs) / ntst);
+  if(length(ypvs) > 1000){
+    # need to filter a bit, make the plotting faster
+    levels = as.integer( xpvs/xpvs[1] * 1e3);
+    keep = c(TRUE, diff(levels)!=0);
+    levels = as.integer( ypvs/ypvs[1] * 1e3);
+    keep = keep | c(TRUE, diff(levels)!=0);
+    ypvs = ypvs[keep];
+    xpvs = xpvs[keep];
+    rm(keep)
+  }
+  return(data.frame(x = xpvs, y = ypvs));
+}
+
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+library(data.table)
+library(MatrixEQTL)
+suppressPackageStartupMessages(library(ggstatsplot))
+
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/MatrixEQTL/RSEM_eQTL.RData")
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/MatrixEQTL/HTSeq_eQTL.RData")
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+### A. QQ-plot{#A}
+
+```{r}
+Mat <- rbind(data.frame(qqpoint(RSEM_PolyA_QTL), Library = "PolyA"), 
+             data.frame(qqpoint(RSEM_Total_QTL), Library = "Total"))
+
+library(ggplot2)
+ggplot(Mat, aes(x = x, y = y, color = Library)) +
+  geom_abline(slope = 1) +
+  geom_point() +
+  geom_line() +
+  guides(color = FALSE) +
+  scale_color_manual(values = c(col.p, col.t))+ #your colors here
+  guides(color = FALSE)+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), axis.line = element_line()) +
+  labs(title = "RSEM", 
+       x = expression('\u2013 log'[10]*'(p-value), expected'), 
+       y = expression('\u2013 log'[10]*'(p-value), observed')) -> p1
+
+
+
+Mat <- rbind(data.frame(qqpoint(HTSeq_PolyA_QTL), Library = "PolyA"), 
+             data.frame(qqpoint(HTSeq_Total_QTL), Library = "Total"))
+
+ggplot(Mat, aes(x = x, y = y, color = Library)) +
+  geom_abline(slope = 1) +
+  geom_point() +
+  geom_line() +
+  guides(color = FALSE) +
+  scale_color_manual(values = c(col.p, col.t))+ #your colors here
+  guides(color = FALSE)+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), axis.line = element_line()) +
+  labs(title = "HTSeq", 
+       x = expression('\u2013 log'[10]*'(p-value), expected'), 
+       y = expression('\u2013 log'[10]*'(p-value), observed')) -> p2
+```
+
+```{r fig.height=4, fig.width=8}
+ggstatsplot::combine_plots(
+  p1,
+  p2,
+  ncol = 2, 
+  labels = c("(a)", "(b)")
+  # title.text = "HTSeq identified gene",
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+### B. Venn Diagram{#B}
+```{r}
+HTSeq_PolyA_cis <- as.data.table(HTSeq_PolyA_QTL$cis$eqtls)
+HTSeq_PolyA_cis[, snps:=as.character(snps)]
+HTSeq_PolyA_cis[, gene:=as.character(gene)]
+HTSeq_Total_cis <- as.data.table(HTSeq_Total_QTL$cis$eqtls)
+HTSeq_Total_cis[, snps:=as.character(snps)]
+HTSeq_Total_cis[, gene:=as.character(gene)]
+
+HTSeq_PolyA_cis_gene <- unique(HTSeq_PolyA_cis[FDR < 0.05, gene])
+HTSeq_Total_cis_gene <- unique(HTSeq_Total_cis[FDR < 0.05, gene])
+
+RSEM_PolyA_cis <- as.data.table(RSEM_PolyA_QTL$cis$eqtls)
+RSEM_PolyA_cis[, snps:=as.character(snps)]
+RSEM_PolyA_cis[, gene:=as.character(gene)]
+RSEM_Total_cis <- as.data.table(RSEM_Total_QTL$cis$eqtls)
+RSEM_Total_cis[, snps:=as.character(snps)]
+RSEM_Total_cis[, gene:=as.character(gene)]
+
+RSEM_PolyA_cis_gene <- unique(RSEM_PolyA_cis[FDR < 0.05, gene])
+RSEM_Total_cis_gene <- unique(RSEM_Total_cis[FDR < 0.05, gene])
+```
+
+```{r}
+# RSEM
+input = list(PolyA = RSEM_PolyA_cis_gene, Total = RSEM_Total_cis_gene)
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+library(ggplot2)
+library(ggforce)
+library(cowplot)
+ggplot() + geom_circle(aes(x0 = c(-1, 1), 
+                           y0 = c(0, 0), 
+                           r = c(2, 2), 
+                           color = c(col.p, col.t), 
+                           fill = c(col.p, col.t)), 
+                       lwd = 1.5, 
+                       alpha = .1)+
+  guides(color = F, fill = F, alpha = F)+
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() + 
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) + 
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6) -> p3
+
+# HTSeq
+input = list(PolyA = HTSeq_PolyA_cis_gene, Total = HTSeq_Total_cis_gene)
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+ggplot() + geom_circle(aes(x0 = c(-1, 1), 
+                           y0 = c(0, 0), 
+                           r = c(2, 2), 
+                           color = c(col.p, col.t), 
+                           fill = c(col.p, col.t)), 
+                       lwd = 1.5, 
+                       alpha = .1)+
+  guides(color = F, fill = F, alpha = F)+
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() + 
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) + 
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6) -> p4
+```
+
+```{r fig.height=4, fig.width=8}
+ggstatsplot::combine_plots(
+  p3,
+  p4,
+  ncol = 2, 
+  labels = c("RSEM", "HTSeq")
+  # title.text = "HTSeq identified gene",
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+### C. Manhattan plot{#C}
+
+```{r}
+snpspos <- fread("/mnt/raid61/Personal_data/tangchao/QTL/document/Genotype/SNP_for_QTL/snp_position.txt", header = T, select = 2:4)
+setkey(snpspos, snpid)
+
+HTSeq_PolyA_cis <- cbind(HTSeq_PolyA_cis, snpspos[HTSeq_PolyA_cis$snps, 2:3])
+HTSeq_Total_cis <- cbind(HTSeq_Total_cis, snpspos[HTSeq_Total_cis$snps, 2:3])
+RSEM_PolyA_cis <- cbind(RSEM_PolyA_cis, snpspos[RSEM_PolyA_cis$snps, 2:3])
+RSEM_Total_cis <- cbind(RSEM_Total_cis, snpspos[RSEM_Total_cis$snps, 2:3])
+```
+
+```{r}
+HTSeq_PolyA_cis_man <- data.frame(HTSeq_PolyA_cis[, .(snps, chr, pos, pvalue, FDR, gene)])
+colnames(HTSeq_PolyA_cis_man) <- c("SNP", "CHR", "BP", "P", "FDR", "Gene")
+
+HTSeq_Total_cis_man <- data.frame(HTSeq_Total_cis[, .(snps, chr, pos, pvalue, FDR, gene)])
+colnames(HTSeq_Total_cis_man) <- c("SNP", "CHR", "BP", "P", "FDR", "Gene")
+
+RSEM_PolyA_cis_man <- data.frame(RSEM_PolyA_cis[, .(snps, chr, pos, pvalue, FDR, gene)])
+colnames(RSEM_PolyA_cis_man) <- c("SNP", "CHR", "BP", "P", "FDR", "Gene")
+
+RSEM_Total_cis_man <- data.frame(RSEM_Total_cis[, .(snps, chr, pos, pvalue, FDR, gene)])
+colnames(RSEM_Total_cis_man) <- c("SNP", "CHR", "BP", "P", "FDR", "Gene")
+```
+
+```{r eval=F}
+# library(qqman)
+# GeneOfInterest <- "ENSG00000262539.1_5"
+# GeneOfInterest <- RSEM_PolyA_cis_gene[3]
+# sub <- subset(RSEM_PolyA_cis_man, Gene == GeneOfInterest)
+# snpsOfInterest <- subset(sub, FDR < 0.05)$SNP
+# 
+# manhattan(sub, 
+#           highlight = snpsOfInterest, 
+#           main = substr(GeneOfInterest, 1, 15), 
+#           cex = 0.6, 
+#           cex.axis = 0.9, 
+#           xlim = range(sub$BP), 
+#           suggestiveline = F, 
+#           genomewideline = F)
+```
+
+```{r fig.width=8, fig.height=4}
+GeneOfInterest <- intersect(RSEM_PolyA_cis_gene, RSEM_Total_cis_gene)[9]
+
+# par(mfrow = c(1, 2))
+sub <- subset(RSEM_PolyA_cis_man, Gene == GeneOfInterest)
+# snpsOfInterest <- subset(sub, FDR < 0.05)$SNP
+# manhattan(sub, 
+#           highlight = snpsOfInterest, 
+#           main = substr(GeneOfInterest, 1, 15), 
+#           cex = 0.6, 
+#           cex.axis = 0.9, 
+#           xlim = range(sub$BP), 
+#           suggestiveline = F, 
+#           genomewideline = F)
+ggplot(sub, aes(x = BP, y = -log10(P))) +
+  geom_point(color = "grey") +
+  geom_point(data = subset(sub, FDR < 0.05), aes(x = BP, y = -log10(P)), color = col.p) +
+  labs(y = expression('\u2013 log'[10]*'(p)'), x = paste("Chromosome", unique(sub$CHR), "position"))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) +
+  scale_x_continuous(breaks = c(range(sub$BP), sub$BP[1])) -> p5
+
+
+sub <- subset(RSEM_Total_cis_man, Gene == GeneOfInterest)
+# snpsOfInterest <- subset(sub, FDR < 0.05)$SNP
+# manhattan(sub, 
+#           highlight = snpsOfInterest, 
+#           main = substr(GeneOfInterest, 1, 15), 
+#           cex = 0.6, 
+#           cex.axis = 0.9, 
+#           xlim = range(sub$BP), 
+#           suggestiveline = F, 
+#           genomewideline = F)
+
+ggplot(sub, aes(x = BP, y = -log10(P))) +
+  geom_point(color = "grey") +
+  geom_point(data = subset(sub, FDR < 0.05), aes(x = BP, y = -log10(P)), color = col.t) +
+  labs(y = expression('\u2013 log'[10]*'(p)'), x = paste("Chromosome", unique(sub$CHR), "position"))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) +
+  scale_x_continuous(breaks = c(range(sub$BP), sub$BP[1])) -> p6
+
+```
+
+```{r fig.height=6, fig.width=11}
+ggstatsplot::combine_plots(
+  p5 + labs(title = "PolyA"),
+  p6 + labs(title = "Total"),
+  ncol = 2, 
+  labels = c("(a)", "(b)"), 
+  title.text = paste("RSEM", GeneOfInterest, sep = "\n")
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+
+
+```{r fig.width=8, fig.height=4}
+GeneOfInterest <- intersect(HTSeq_PolyA_cis_gene, HTSeq_Total_cis_gene)[2]
+
+# par(mfrow = c(1, 2))
+sub <- subset(HTSeq_PolyA_cis_man, Gene == GeneOfInterest)
+# snpsOfInterest <- subset(sub, FDR < 0.05)$SNP
+# manhattan(sub, 
+#           highlight = snpsOfInterest, 
+#           main = substr(GeneOfInterest, 1, 15), 
+#           cex = 0.6, 
+#           cex.axis = 0.9, 
+#           xlim = range(sub$BP), 
+#           suggestiveline = F, 
+#           genomewideline = F)
+ggplot(sub, aes(x = BP, y = -log10(P))) +
+  geom_point(color = "grey") +
+  geom_point(data = subset(sub, FDR < 0.05), aes(x = BP, y = -log10(P)), color = col.p) +
+  labs(y = expression('\u2013 log'[10]*'(p)'), x = paste("Chromosome", unique(sub$CHR), "position"))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) +
+  scale_x_continuous(breaks = c(range(sub$BP), sub$BP[1])) -> p7
+
+
+sub <- subset(HTSeq_Total_cis_man, Gene == GeneOfInterest)
+# snpsOfInterest <- subset(sub, FDR < 0.05)$SNP
+# manhattan(sub, 
+#           highlight = snpsOfInterest, 
+#           main = substr(GeneOfInterest, 1, 15), 
+#           cex = 0.6, 
+#           cex.axis = 0.9, 
+#           xlim = range(sub$BP), 
+#           suggestiveline = F, 
+#           genomewideline = F)
+
+ggplot(sub, aes(x = BP, y = -log10(P))) +
+  geom_point(color = "grey") +
+  geom_point(data = subset(sub, FDR < 0.05), aes(x = BP, y = -log10(P)), color = col.t) +
+  labs(y = expression('\u2013 log'[10]*'(p)'), x = paste("Chromosome", unique(sub$CHR), "position"))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) +
+  scale_x_continuous(breaks = c(range(sub$BP), sub$BP[1])) -> p8
+
+```
+
+```{r fig.height=6, fig.width=11}
+ggstatsplot::combine_plots(
+  p7 + labs(title = "PolyA"),
+  p8 + labs(title = "Total"),
+  ncol = 2, 
+  labels = c("(a)", "(b)"), 
+  title.text = paste("HTSeq", GeneOfInterest, sep = "\n")
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+### D. Box plot{#D}
+```{r}
+# RSEM
+RSEM_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/PolyA_RNA_TPM.txt.gz")
+RSEM_PolyA <- data.frame(RSEM_PolyA[, -1], row.names = RSEM_PolyA[[1]])
+stopifnot(identical(colnames(RSEM_PolyA), SampInfo_PolyA$donor_id))
+
+RSEM_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Total_RNA_TPM.txt.gz")
+RSEM_Total <- data.frame(RSEM_Total[, -1], row.names = RSEM_Total[[1]])
+stopifnot(identical(colnames(RSEM_Total), SampInfo_Total$donor_id))
+```
+
+```{r}
+# HTSeq
+library(GenomicAlignments)
+library(DESeq2)
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+
+dds_PolyA <- DESeqDataSet(se_PolyA, design = ~ 1)
+dds_PolyA <- dds_PolyA[rowSums(counts(dds_PolyA) >= 10) >= .2*ncol(dds_PolyA), ]
+dds_PolyA <- estimateSizeFactors(dds_PolyA)
+dds_PolyA <- estimateDispersions(dds_PolyA)
+
+dds_Total <- DESeqDataSet(se_Total, design = ~ 1)
+dds_Total <- dds_Total[rowSums(counts(dds_Total) >= 10) >= .2*ncol(dds_Total), ]
+dds_Total <- estimateSizeFactors(dds_Total)
+dds_Total <- estimateDispersions(dds_Total)
+
+HTSeq_PolyA <- counts(dds_PolyA, normalized = TRUE)
+HTSeq_Total <- counts(dds_Total, normalized = TRUE)
+
+colnames(HTSeq_PolyA) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(HTSeq_PolyA))
+colnames(HTSeq_Total) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(HTSeq_Total))
+if(identical(colnames(HTSeq_PolyA), SampInfo_PolyA$ID)) colnames(HTSeq_PolyA) <- SampInfo_PolyA$donor_id
+if(identical(colnames(HTSeq_Total), SampInfo_Total$ID)) colnames(HTSeq_Total) <- SampInfo_Total$donor_id
+stopifnot(identical(colnames(HTSeq_PolyA), SampInfo_PolyA$donor_id))
+stopifnot(identical(colnames(HTSeq_Total), SampInfo_Total$donor_id))
+
+identical(SampInfo_Total$donor_id, SampInfo_PolyA$donor_id)
+```
+
+```{r}
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Genotype/snps.RData")
+# snps$FindRow("rs540662756")[[3]]
+
+SNP_Info <- fread("/mnt/raid61/Personal_data/tangchao/IR6/document/genotype/VCF/BPWP10_23_05_17_SNP_only.basicInfo", select = 3:5)
+colnames(SNP_Info) <- c("SNP", "A1", "A2")
+setkey(SNP_Info, SNP)
+```
+
+```{r}
+GeneOfInterest <- intersect(RSEM_PolyA_cis_gene, RSEM_Total_cis_gene)[9]
+SNPOfInterest <- RSEM_PolyA_cis[gene == GeneOfInterest, snps][1]
+
+ref_alt_ti <- c(paste(SNP_Info[SNPOfInterest, A1], SNP_Info[SNPOfInterest, A1], sep=""), 
+                paste(SNP_Info[SNPOfInterest, A1], SNP_Info[SNPOfInterest, A2], sep=""),
+                paste(SNP_Info[SNPOfInterest, A2], SNP_Info[SNPOfInterest, A2], sep=""))
+
+stopifnot(identical(colnames(RSEM_PolyA), MatrixEQTL::colnames(snps)))
+
+Tab <- rbind(data.frame(Gene = as.numeric(RSEM_PolyA[GeneOfInterest,]), 
+                        SNP = as.numeric(snps$FindRow(SNPOfInterest)[[3]]),
+                        Library = "PolyA"),
+             data.frame(Gene = as.numeric(RSEM_Total[GeneOfInterest,]), 
+                        SNP = as.numeric(snps$FindRow(SNPOfInterest)[[3]]),
+                        Library = "Total"))
+Tab$SNP <- factor(Tab$SNP, labels = ref_alt_ti)
+
+ggplot(Tab, aes(x = SNP, y = Gene, colour = Library)) +
+  geom_boxplot()+
+  scale_x_discrete(labels = paste(levels(Tab$SNP), table(Tab$SNP), sep = "\n")) +
+  labs(x = SNPOfInterest, y = GeneOfInterest) +
+  guides(colour = F) +
+  scale_colour_manual(values = c(col.p, col.t))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) -> p9
+```
+
+```{r}
+tit_PolyA <- RSEM_PolyA_cis[gene == GeneOfInterest & snps == SNPOfInterest, paste("b = ", round(beta, 2), ", p = ", signif(pvalue, 2), sep = "")]
+
+tit_Total <- RSEM_Total_cis[gene == GeneOfInterest & snps == SNPOfInterest, paste("b = ", round(beta, 2), ", p = ", signif(pvalue, 2), sep = "")]
+```
+
+```{r}
+ggplot(subset(Tab, Library == "PolyA"), aes(x = SNP, y = Gene)) +
+  geom_boxplot(color = col.p)+
+  scale_x_discrete(labels = paste(levels(subset(Tab, Library == "PolyA")$SNP), table(subset(Tab, Library == "PolyA")$SNP), sep = "\n")) +
+  labs(x = SNPOfInterest, y = GeneOfInterest, title = tit_PolyA) +
+  guides(colour = F) +
+  scale_colour_manual(values = c(col.p, col.t))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) -> p10
+
+ggplot(subset(Tab, Library == "Total"), aes(x = SNP, y = Gene)) +
+  geom_boxplot(color = col.t)+
+  scale_x_discrete(labels = paste(levels(subset(Tab, Library == "Total")$SNP), table(subset(Tab, Library == "Total")$SNP), sep = "\n")) +
+  labs(x = SNPOfInterest, y = GeneOfInterest, title = tit_Total) +
+  guides(colour = F) +
+  scale_colour_manual(values = c(col.p, col.t))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) -> p11
+```
+
+```{r fig.height=4, fig.width=12}
+ggstatsplot::combine_plots(
+  p9,
+  p10,
+  p11,
+  ncol = 3, 
+  labels = c("(a)", "(b)", "(c)"), 
+  title.text = "RSEM"
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+```{r}
+GeneOfInterest <- intersect(HTSeq_PolyA_cis_gene, HTSeq_Total_cis_gene)[2]
+SNPOfInterest <- HTSeq_PolyA_cis[gene == GeneOfInterest, snps][1]
+
+ref_alt_ti <- c(paste(SNP_Info[SNPOfInterest, A1], SNP_Info[SNPOfInterest, A1], sep=""), 
+                paste(SNP_Info[SNPOfInterest, A1], SNP_Info[SNPOfInterest, A2], sep=""),
+                paste(SNP_Info[SNPOfInterest, A2], SNP_Info[SNPOfInterest, A2], sep=""))
+
+stopifnot(identical(colnames(HTSeq_PolyA), MatrixEQTL::colnames(snps)))
+
+Tab <- rbind(data.frame(Gene = as.numeric(HTSeq_PolyA[GeneOfInterest,]), 
+                        SNP = as.numeric(snps$FindRow(SNPOfInterest)[[3]]),
+                        Library = "PolyA"),
+             data.frame(Gene = as.numeric(HTSeq_Total[GeneOfInterest,]), 
+                        SNP = as.numeric(snps$FindRow(SNPOfInterest)[[3]]),
+                        Library = "Total"))
+Tab$SNP <- factor(Tab$SNP, labels = ref_alt_ti)
+
+ggplot(Tab, aes(x = SNP, y = Gene, colour = Library)) +
+  geom_boxplot()+
+  scale_x_discrete(labels = paste(levels(Tab$SNP), table(Tab$SNP), sep = "\n")) +
+  labs(x = SNPOfInterest, y = GeneOfInterest) +
+  guides(colour = F) +
+  scale_colour_manual(values = c(col.p, col.t))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) -> p12
+```
+
+```{r}
+tit_PolyA <- HTSeq_PolyA_cis[gene == GeneOfInterest & snps == SNPOfInterest, paste("b = ", round(beta, 2), ", p = ", signif(pvalue, 2), sep = "")]
+
+tit_Total <- HTSeq_Total_cis[gene == GeneOfInterest & snps == SNPOfInterest, paste("b = ", round(beta, 2), ", p = ", signif(pvalue, 2), sep = "")]
+```
+
+```{r}
+ggplot(subset(Tab, Library == "PolyA"), aes(x = SNP, y = Gene)) +
+  geom_boxplot(color = col.p)+
+  scale_x_discrete(labels = paste(levels(subset(Tab, Library == "PolyA")$SNP), table(subset(Tab, Library == "PolyA")$SNP), sep = "\n")) +
+  labs(x = SNPOfInterest, y = GeneOfInterest, title = tit_PolyA) +
+  guides(colour = F) +
+  scale_colour_manual(values = c(col.p, col.t))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) -> p13
+
+ggplot(subset(Tab, Library == "Total"), aes(x = SNP, y = Gene)) +
+  geom_boxplot(color = col.t)+
+  scale_x_discrete(labels = paste(levels(subset(Tab, Library == "Total")$SNP), table(subset(Tab, Library == "Total")$SNP), sep = "\n")) +
+  labs(x = SNPOfInterest, y = GeneOfInterest, title = tit_Total) +
+  guides(colour = F) +
+  scale_colour_manual(values = c(col.p, col.t))+
+  theme(panel.background = element_blank(), 
+        panel.grid = element_line(colour = "grey95"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(size = 12, angle = 30), 
+        axis.line = element_line()) -> p14
+```
+
+```{r fig.height=4, fig.width=12}
+ggstatsplot::combine_plots(
+  p12,
+  p13,
+  p14,
+  ncol = 3, 
+  labels = c("(a)", "(b)", "(c)"), 
+  title.text = "HTSeq"
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+

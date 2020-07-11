@@ -1,0 +1,836 @@
+---
+title: "Fig.3 Comparison of identified genes and transcripts"
+author: "Chao Tang"
+date: "9/25/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+# Content
+[A. Identified gene number](#A)    
+[B. Identified genes' biotype](#B)    
+[C. Identified transcript number](#C)    
+[D. Identified transcripts' biotype](#D)    
+[E. Correlation of different method quantification](#E)    
+[F. GO&KEGG enrichment of method-specific genes](#F)    
+  [Biotype of Library-specific isoforms](#F1)    
+  [Biotype of Library-specific genes](#F2)    
+  [GO&KEGG of Library-specific genes](#F3)
+
+
+
+## preparation
+```{r message=FALSE}
+suppressPackageStartupMessages(library(data.table))
+gtf <- rtracklayer::readGFF("/mnt/raid61/Personal_data/tangchao/Document/gencode/human/GRCh37/gencode.v30lift37.annotation.gtf")
+gtf <- rtracklayer::readGFF("/mnt/raid61/Personal_data/tangchao/Document/gencode/human/GRCh37/gencode.v30lift37.annotation.gtf")
+setDT(gtf)
+gtf <- gtf[type %in% c("gene", "transcript"), .(seqid, type, start, end, strand, gene_id, gene_type, gene_name, transcript_id, transcript_type)]
+gtf[, gene_id:=substr(gene_id, 1, 15)]
+gtf[, transcript_id:=substr(transcript_id, 1, 15)]
+
+Gene_biotype <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Annotation/Gene_biotype.csv", header = F, select = 1:2)
+setkey(Gene_biotype, V1)
+
+gtf_gene <- gtf[type == "gene", ]
+gtf_gene$gene_biotype <- Gene_biotype[gtf_gene$gene_type, V2]
+gtf_gene <- unique(gtf_gene[, .(gene_id, gene_biotype)])
+setkey(gtf_gene, gene_id)
+
+gtf_tx <- gtf[type == "transcript", ]
+gtf_tx$transcript_biotype <- Gene_biotype[gtf_tx$transcript_type, V2]
+gtf_tx <- unique(gtf_tx[, .(transcript_id, transcript_biotype)])
+setkey(gtf_tx, transcript_id)
+```
+
+```{r}
+# col.p <- lattice::trellis.par.get("superpose.symbol")$col[1] # colour of PolyA RNA
+# col.t <- lattice::trellis.par.get("superpose.symbol")$col[2] # colour of Total RNA
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+## A. Identified gene number{#A}
+
+### PolyA
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+```
+
+filtering
+```{r}
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+PolyA_gene <- unique(substr(do.call(rbind, Gene_PolyA)[[1]], 1, 15))
+```
+
+### Total
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+```
+
+filtering
+```{r}
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+Total_gene <- unique(substr(do.call(rbind, Gene_Total)[[1]], 1, 15))
+```
+
+```{r message=FALSE}
+Mat <- rbind(data.frame(Gene = mapply(nrow, Gene_PolyA), Library = "PolyA"), data.frame(Gene = mapply(nrow, Gene_Total), Library = "Total"))
+
+library(ggpubr)
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif", method = "t.test")+ # Add significance levels
+  stat_compare_means(method = "t.test", label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes")
+
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, method = "t.test")+ # Add significance levelsaes(label = paste0("p = ", ..p.format..))
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. genes")
+```
+
+
+```{r message=FALSE}
+input = list(PolyA = PolyA_gene, Total = Total_gene)
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+library(ggplot2)
+library(ggforce)
+library(cowplot)
+ggplot() + geom_circle(aes(x0 = c(-1, 1), 
+                           y0 = c(0, 0), 
+                           r = c(2, 2), 
+                           color = c(col.p, col.t), 
+                           fill = c(col.p, col.t)), 
+                       lwd = 1.5, 
+                       alpha = .1)+
+  guides(color = F, fill = F, alpha = F)+
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() + 
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) + 
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6)
+```
+
+## B. Identified genes' biotype{#B}
+```{r}
+Total_gene_biotype <- mapply(function(x) table(gtf_gene[x[[1]],]$gene_biotype), Gene_Total)
+PolyA_gene_biotype <- mapply(function(x) table(gtf_gene[x[[1]],]$gene_biotype), Gene_PolyA)
+
+Total_gene_biotype <- data.frame(reshape2::melt(Total_gene_biotype))
+PolyA_gene_biotype <- data.frame(reshape2::melt(PolyA_gene_biotype))
+Total_gene_biotype$Library <- "Total"
+PolyA_gene_biotype$Library <- "PolyA"
+gene_biotype <- rbind(PolyA_gene_biotype, Total_gene_biotype)
+```
+
+```{r}
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func, varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+df2 <- data_summary(gene_biotype, varname="value", 
+                    groupnames=c("Library", "Var1"))
+```
+
+```{r}
+ggplot(df2, aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Biotype", y = "No. gene")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 22, hjust = 1)) -> p
+
+tmp <- with(gene_biotype, by(gene_biotype, Var1, function(x) t.test(value ~ Library, data = x)))
+(lab <- signif(sapply(tmp, function(x) x$p.value), 2))
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))) * .03
+
+
+p + ggplot2::annotate("text", x = 1:5,
+                    y = y0, 
+                    label = lab)
+
+plevel <- function(x) {
+  if(x < 1e-04) {
+    "****"
+  } else {
+    if(x < 0.001) {
+      "***"
+    } else {
+      if(x < 0.01) {
+        "**"
+      } else {
+        if(x < 0.05) {
+          "*"
+        } else {
+          "ns"
+        }
+      }
+    }
+  }
+}
+sapply(lab, plevel)
+p + ggplot2::annotate("text", x = 1:5,
+                      y = y0, 
+                      label = sapply(lab, plevel))
+```
+
+Percentage
+```{r}
+Total_gene_biotype <- mapply(function(x) table(gtf_gene[x[[1]],]$gene_biotype), Gene_Total)
+PolyA_gene_biotype <- mapply(function(x) table(gtf_gene[x[[1]],]$gene_biotype), Gene_PolyA)
+
+Total_gene_biotype <- apply(Total_gene_biotype, 2, function(x) x/sum(x)*100)
+PolyA_gene_biotype <- apply(PolyA_gene_biotype, 2, function(x) x/sum(x)*100)
+
+Total_gene_biotype <- data.frame(reshape2::melt(Total_gene_biotype))
+PolyA_gene_biotype <- data.frame(reshape2::melt(PolyA_gene_biotype))
+Total_gene_biotype$Library <- "Total"
+PolyA_gene_biotype$Library <- "PolyA"
+gene_biotype <- rbind(PolyA_gene_biotype, Total_gene_biotype)
+
+df2 <- data_summary(gene_biotype, varname="value", 
+                    groupnames=c("Library", "Var1"))
+```
+
+```{r}
+ggplot(df2, aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Biotype", y = "Percentage of gene")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 22, hjust = 1)) -> p
+
+tmp <- with(gene_biotype, by(gene_biotype, Var1, function(x) t.test(value ~ Library, data = x)))
+(lab <- signif(sapply(tmp, function(x) x$p.value), 2))
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))) * .03
+
+p + ggplot2::annotate("text", x = 1:5,
+                    y = y0, 
+                    label = lab)
+
+sapply(lab, plevel)
+p + ggplot2::annotate("text", x = 1:5,
+                      y = y0, 
+                      label = sapply(lab, plevel))
+```
+
+## C. Identified transcript number{#C}
+
+### PolyA
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".isoforms.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+```
+
+filtering
+```{r}
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, transcript_id:=substr(transcript_id, 1, 15)]})
+PolyA_gene <- unique(substr(do.call(rbind, Gene_PolyA)[[1]], 1, 15))
+```
+
+### Total
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_Total <- paste(SampInfo_Total$ID , ".isoforms.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+```
+
+filtering
+```{r}
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, transcript_id:=substr(transcript_id, 1, 15)]})
+Total_gene <- unique(substr(do.call(rbind, Gene_Total)[[1]], 1, 15))
+```
+
+```{r message=FALSE}
+Mat <- rbind(data.frame(Gene = mapply(nrow, Gene_PolyA), Library = "PolyA"), data.frame(Gene = mapply(nrow, Gene_Total), Library = "Total"))
+
+library(ggpubr)
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif", method = "t.test")+ # Add significance levels
+  stat_compare_means(method = "t.test", label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. isoform")
+
+ggviolin(Mat, x = "Library", y = "Gene", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot", 
+         add.params = list(fill = "white"))+
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, method = "t.test")+ # Add significance levelsaes(label = paste0("p = ", ..p.format..))
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. isoform")
+```
+
+
+```{r message=FALSE}
+input = list(PolyA = PolyA_gene, Total = Total_gene)
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+library(ggplot2)
+library(ggforce)
+library(cowplot)
+ggplot() + geom_circle(aes(x0 = c(-1, 1), 
+                           y0 = c(0, 0), 
+                           r = c(2, 2), 
+                           color = c(col.p, col.t), 
+                           fill = c(col.p, col.t)), 
+                       lwd = 1.5, 
+                       alpha = .1)+
+  guides(color = F, fill = F, alpha = F)+
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() + 
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) + 
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6)
+```
+
+## D. Identified transcripts' biotype{#D}
+```{r}
+Total_gene_biotype <- mapply(function(x) table(gtf_tx[x[[1]],]$transcript_biotype), Gene_Total)
+PolyA_gene_biotype <- mapply(function(x) table(gtf_tx[x[[1]],]$transcript_biotype), Gene_PolyA)
+
+Total_gene_biotype <- data.frame(reshape2::melt(Total_gene_biotype))
+PolyA_gene_biotype <- data.frame(reshape2::melt(PolyA_gene_biotype))
+Total_gene_biotype$Library <- "Total"
+PolyA_gene_biotype$Library <- "PolyA"
+gene_biotype <- rbind(PolyA_gene_biotype, Total_gene_biotype)
+
+df2 <- data_summary(gene_biotype, varname="value", 
+                    groupnames=c("Library", "Var1"))
+```
+
+```{r}
+ggplot(df2, aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Biotype", y = "No. isoform")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 22, hjust = 1)) -> p
+
+tmp <- with(gene_biotype, by(gene_biotype, Var1, function(x) t.test(value ~ Library, data = x)))
+(lab <- signif(sapply(tmp, function(x) x$p.value), 2))
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))) * .03
+
+
+p + ggplot2::annotate("text", x = 1:6,
+                    y = y0, 
+                    label = lab)
+
+sapply(lab, plevel)
+p + ggplot2::annotate("text", x = 1:6,
+                      y = y0, 
+                      label = sapply(lab, plevel))
+```
+
+Percentage
+```{r}
+Total_gene_biotype <- mapply(function(x) table(gtf_tx[x[[1]],]$transcript_biotype), Gene_Total)
+PolyA_gene_biotype <- mapply(function(x) table(gtf_tx[x[[1]],]$transcript_biotype), Gene_PolyA)
+
+Total_gene_biotype <- apply(Total_gene_biotype, 2, function(x) x/sum(x)*100)
+PolyA_gene_biotype <- apply(PolyA_gene_biotype, 2, function(x) x/sum(x)*100)
+
+Total_gene_biotype <- data.frame(reshape2::melt(Total_gene_biotype))
+PolyA_gene_biotype <- data.frame(reshape2::melt(PolyA_gene_biotype))
+Total_gene_biotype$Library <- "Total"
+PolyA_gene_biotype$Library <- "PolyA"
+gene_biotype <- rbind(PolyA_gene_biotype, Total_gene_biotype)
+
+df2 <- data_summary(gene_biotype, varname="value", 
+                    groupnames=c("Library", "Var1"))
+```
+
+```{r}
+ggplot(df2, aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Biotype", y = "Percentage of isoform")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 22, hjust = 1)) -> p
+
+tmp <- with(gene_biotype, by(gene_biotype, Var1, function(x) t.test(value ~ Library, data = x)))
+(lab <- signif(sapply(tmp, function(x) x$p.value), 2))
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))) * .03
+
+p + ggplot2::annotate("text", x = 1:6,
+                    y = y0, 
+                    label = lab)
+
+sapply(lab, plevel)
+p + ggplot2::annotate("text", x = 1:6,
+                      y = y0, 
+                      label = sapply(lab, plevel))
+```
+
+## E. Correlation of different method quantification{#E}
+
+PolyA
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+```
+
+Total
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+```
+
+```{r}
+stopifnot(identical(SampInfo_PolyA$donor_id, SampInfo_Total$donor_id))
+Gene_TPM <- list()
+for(i in 1:40){
+  tmp <- merge(Gene_PolyA[[i]][, c(1, 3)], Gene_Total[[i]][, c(1, 3)], by = "gene_id")
+  colnames(tmp)[2:3] <- c("PolyA", "Total")
+  Gene_TPM[[i]] <- tmp
+}
+```
+
+
+```{r fig.width=4, fig.height=6}
+gene_cor <- mapply(Gene_TPM, FUN = function(x) cor(log1p(x[[2]]), log1p(x[[3]])))
+
+ggviolin(gene_cor,
+         add = "boxplot", 
+         fill = "#FC4E07", 
+         alpha = .5, 
+         add.params = list(fill = "white")) +
+  ggbeeswarm::geom_quasirandom(size = 2, alpha = .5, col = "#FC4E07") +
+  labs(y = "r")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        axis.ticks.x = element_blank())
+
+```
+
+
+## F. GO&KEGG enrichment of method-specific genes{#F}
+
+### Biotype of Library-specific isoforms{#F1}
+```{r}
+PolyA_Spe_isoform <- input$PolyA[!input$PolyA %in% input$Total]
+Total_Spe_isoform <- input$Total[!input$Total %in% input$PolyA]
+```
+
+```{r}
+
+table(gtf_tx[PolyA_Spe_isoform,]$transcript_biotype)
+table(gtf_tx[Total_Spe_isoform,]$transcript_biotype)
+
+table(gtf_tx[Total_Spe_isoform,]$transcript_biotype)/length(Total_Spe_isoform)
+table(gtf_tx[PolyA_Spe_isoform,]$transcript_biotype)/length(PolyA_Spe_isoform)
+```
+
+```{r}
+df <- data.frame(
+  group = names(table(gtf_tx[PolyA_Spe_isoform,]$transcript_biotype)),
+  value = as.numeric(table(gtf_tx[PolyA_Spe_isoform,]$transcript_biotype))
+)
+df
+library(ggplot2)
+# Barplot
+bp<- ggplot(df, aes(x="", y=value, fill=group))+
+  geom_bar(width = 1, stat = "identity")
+pie <- bp + coord_polar("y", start=0)
+# use brewer color palettes
+blank_theme <- theme_minimal()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_blank(),
+    panel.grid=element_blank(),
+    axis.ticks = element_blank(),
+    plot.title=element_text(size=14, face="bold")
+  )
+# Use brewer palette
+pie + 
+  scale_fill_brewer(palette="Dark2") + 
+  blank_theme +
+  theme(axis.text.x = element_blank())+
+  geom_text(data = df, aes(x = 1.3, y = c(0, cumsum(rev(value))[1:5]) + rev(value)/2, 
+                           label = rev(paste0(round(value/sum(value)*100, 2), "%"))), size = 3)
+```
+
+```{r}
+library(plotly)
+p <- plot_ly(df, labels = ~group, values = ~value, type = 'pie') %>%
+  layout(title = 'PolyA',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+p
+```
+
+
+```{r}
+df <- data.frame(
+  group = names(table(gtf_tx[Total_Spe_isoform,]$transcript_biotype)),
+  value = as.numeric(table(gtf_tx[Total_Spe_isoform,]$transcript_biotype))
+)
+df
+
+# Barplot
+bp<- ggplot(df, aes(x="", y=value, fill=group))+
+  geom_bar(width = 1, stat = "identity")
+pie <- bp + coord_polar("y", start=0)
+# use brewer color palettes
+blank_theme <- theme_minimal()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_blank(),
+    panel.grid=element_blank(),
+    axis.ticks = element_blank(),
+    plot.title=element_text(size=14, face="bold")
+  )
+# Use brewer palette
+pie + 
+  scale_fill_brewer(palette="Dark2") + 
+  blank_theme +
+  theme(axis.text.x = element_blank())+
+  geom_text(data = df, aes(x = 1.3, y = c(0, cumsum(rev(value))[1:5]) + rev(value)/2, 
+                           label = rev(paste0(round(value/sum(value)*100, 2), "%"))), size = 3)
+```
+
+```{r}
+library(plotly)
+p <- plot_ly(df, labels = ~group, values = ~value, type = 'pie') %>%
+  layout(title = 'Total',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+p
+```
+
+```{r}
+df_PolyA <- data.frame(
+  group = names(table(gtf_tx[PolyA_Spe_isoform,]$transcript_biotype)),
+  value = as.numeric(table(gtf_tx[PolyA_Spe_isoform,]$transcript_biotype))/length(PolyA_Spe_isoform),
+  Library = "PolyA")
+
+df_Total <- data.frame(
+  group = names(table(gtf_tx[Total_Spe_isoform,]$transcript_biotype)),
+  value = as.numeric(table(gtf_tx[Total_Spe_isoform,]$transcript_biotype))/length(Total_Spe_isoform),
+  Library = "Total")
+
+df <- rbind(df_PolyA, df_Total)
+```
+
+```{r}
+ggplot(df, aes(group, value, fill = Library)) +
+  geom_col(position=position_dodge())+
+  # coord_flip() +
+  labs(x = "Biotype", y = "Percentage of isoform", title = "Biotype of Library-specific isoforms")+
+  theme_classic() +
+  # scale_y_continuous(breaks = c(-0.4, -0.2, 0.0, 0.2), label = c("0.4", "0.2", "0.0", "0.2"))+
+  scale_fill_manual(values=c(col.p, col.t))+
+  # guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(angle = 22, hjust = 1), 
+        legend.position = "top")
+```
+
+### Biotype of Library-specific genes{#F2}
+
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+
+# filtering
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+PolyA_gene <- unique(substr(do.call(rbind, Gene_PolyA)[[1]], 1, 15))
+```
+
+```{r}
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+
+# filtering
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+Total_gene <- unique(substr(do.call(rbind, Gene_Total)[[1]], 1, 15))
+```
+
+```{r}
+input = list(PolyA = PolyA_gene, Total = Total_gene)
+PolyA_Spe_gene <- input$PolyA[!input$PolyA %in% input$Total]
+Total_Spe_gene <- input$Total[!input$Total %in% input$PolyA]
+```
+
+```{r}
+table(gtf_gene[PolyA_Spe_gene,]$gene_biotype)
+table(gtf_gene[Total_Spe_gene,]$gene_biotype)
+
+table(gtf_gene[PolyA_Spe_gene,]$gene_biotype)/length(PolyA_Spe_gene)
+table(gtf_gene[Total_Spe_gene,]$gene_biotype)/length(Total_Spe_gene)
+```
+
+```{r}
+df <- data.frame(
+  group = names(table(gtf_gene[PolyA_Spe_gene,]$gene_biotype)),
+  value = as.numeric(table(gtf_gene[PolyA_Spe_gene,]$gene_biotype))
+)
+df
+library(ggplot2)
+# Barplot
+bp<- ggplot(df, aes(x="", y=value, fill=group))+
+  geom_bar(width = 1, stat = "identity")
+pie <- bp + coord_polar("y", start=0)
+# use brewer color palettes
+blank_theme <- theme_minimal()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_blank(),
+    panel.grid=element_blank(),
+    axis.ticks = element_blank(),
+    plot.title=element_text(size=14, face="bold")
+  )
+# Use brewer palette
+pie + 
+  scale_fill_brewer(palette="Dark2") + 
+  blank_theme +
+  theme(axis.text.x = element_blank())+
+  geom_text(data = df, aes(x = 1.3, y = c(0, cumsum(rev(value))[1:4]) + rev(value)/2, 
+                           label = rev(paste0(round(value/sum(value)*100, 2), "%"))), size = 3)
+```
+
+```{r}
+library(plotly)
+p <- plot_ly(df, labels = ~group, values = ~value, type = 'pie') %>%
+  layout(title = 'PolyA',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+p
+```
+
+
+```{r}
+df <- data.frame(
+  group = names(table(gtf_gene[Total_Spe_gene,]$gene_biotype)),
+  value = as.numeric(table(gtf_gene[Total_Spe_gene,]$gene_biotype))
+)
+df
+
+# Barplot
+bp<- ggplot(df, aes(x="", y=value, fill=group))+
+  geom_bar(width = 1, stat = "identity")
+pie <- bp + coord_polar("y", start=0)
+# use brewer color palettes
+blank_theme <- theme_minimal()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_blank(),
+    panel.grid=element_blank(),
+    axis.ticks = element_blank(),
+    plot.title=element_text(size=14, face="bold")
+  )
+# Use brewer palette
+pie + 
+  scale_fill_brewer(palette="Dark2") + 
+  blank_theme +
+  theme(axis.text.x = element_blank())+
+  geom_text(data = df, aes(x = 1.3, y = c(0, cumsum(rev(value))[1:4]) + rev(value)/2, 
+                           label = rev(paste0(round(value/sum(value)*100, 2), "%"))), size = 3)
+```
+
+```{r}
+library(plotly)
+p <- plot_ly(df, labels = ~group, values = ~value, type = 'pie') %>%
+  layout(title = 'Total',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+p
+```
+
+```{r}
+df_PolyA <- data.frame(
+  group = names(table(gtf_gene[PolyA_Spe_gene,]$gene_biotype)),
+  value = -as.numeric(table(gtf_gene[PolyA_Spe_gene,]$gene_biotype))/length(PolyA_Spe_gene),
+  Library = "PolyA")
+
+df_Total <- data.frame(
+  group = names(table(gtf_gene[Total_Spe_gene,]$gene_biotype)),
+  value = as.numeric(table(gtf_gene[Total_Spe_gene,]$gene_biotype))/length(Total_Spe_gene),
+  Library = "Total")
+
+df <- rbind(df_PolyA, df_Total)
+```
+
+```{r}
+ggplot(df, aes(group, value, fill = Library)) +
+  geom_col()+
+  coord_flip() +
+  labs(x = "Biotype", y = "Percentage of gene", title = "Biotype of Library-specific genes")+
+  theme_classic() +
+  scale_y_continuous(breaks = c(-0.4, -0.2, 0.0, 0.2), label = c("0.4", "0.2", "0.0", "0.2"))+
+  scale_fill_manual(values=c(col.p, col.t))+
+  # guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        # axis.text.x = element_text(angle = 22, hjust = 1), 
+        legend.position = "top")
+```
+
+### GO of Library-specific genes{#F3}
+```{r}
+suppressPackageStartupMessages(library(clusterProfiler))
+library(org.Hs.eg.db)
+PolyA_Spe_gene_ego <- enrichGO(gene          = PolyA_Spe_gene,
+                             # universe      = names(geneList),
+                               OrgDb         = org.Hs.eg.db,
+                               keyType       = "ENSEMBL",
+                               ont           = "ALL",
+                               pAdjustMethod = "BH",
+                               pvalueCutoff  = 0.01,
+                               qvalueCutoff  = 0.05,
+                               readable      = TRUE)
+
+Total_Spe_gene_ego <- enrichGO(gene          = Total_Spe_gene,
+                             # universe      = names(geneList),
+                               OrgDb         = org.Hs.eg.db,
+                               keyType       = "ENSEMBL",
+                               ont           = "ALL",
+                               pAdjustMethod = "BH",
+                               pvalueCutoff  = 0.01,
+                               qvalueCutoff  = 0.05,
+                               readable      = TRUE)
+```
+
+```{r}
+dotplot(PolyA_Spe_gene_ego)
+dotplot(Total_Spe_gene_ego)
+```
+
+```{r}
+gene_list = list(PolyA = as.character(bitr(PolyA_Spe_gene, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID), 
+                 Total = as.character(bitr(Total_Spe_gene, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID))
+ck <- compareCluster(gene_list, fun = "enrichKEGG", organism="hsa")
+dotplot(ck)
+```
+
+
+```{r}
+gene <- as.character(bitr(PolyA_Spe_gene, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID)
+PolyA_Spe_gene_kk <- enrichKEGG(gene         = gene,
+                                organism     = 'hsa',
+                                pvalueCutoff = 0.05)
+gene <- as.character(bitr(Total_Spe_gene, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID)
+Total_Spe_gene_kk <- enrichKEGG(gene         = gene,
+                                organism     = 'hsa',
+                                pvalueCutoff = 0.05)
+```
+
+```{r}
+if(nrow(PolyA_Spe_gene_kk) > 0) dotplot(PolyA_Spe_gene_kk)
+if(nrow(Total_Spe_gene_kk) > 0) dotplot(Total_Spe_gene_kk)
+```
+
+```{r}
+xx2 <- compareCluster(geneClusters = list(PolyA = PolyA_Spe_gene, Total = Total_Spe_gene), 
+                      fun="enrichGO", 
+                      OrgDb  = org.Hs.eg.db, 
+                      keyType= 'ENSEMBL', 
+                      ont  = "ALL", 
+                      pAdjustMethod = "BH")
+dotplot(xx2)
+```
+

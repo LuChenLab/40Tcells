@@ -1,0 +1,1164 @@
+---
+title: "Comparison of identified genes and transcripts"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+## Preparation
+```{r}
+library(data.table)
+suppressPackageStartupMessages(library(GenomicAlignments))
+suppressPackageStartupMessages(library(ggpmisc))
+suppressPackageStartupMessages(library(ggpubr))
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+## Correlation of different method quantification
+#### RSEM
+```{r}
+# loading PolyA RNA
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+names(Gene_PolyA) <- SampInfo_PolyA$donor_id
+
+# filtering
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 10, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+# PolyA_gene <- unique(substr(do.call(rbind, Gene_PolyA)[[1]], 1, 15))
+
+# loading Total RNA
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+names(Gene_Total) <- SampInfo_Total$donor_id
+
+# filtering
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 10, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+# Total_gene <- unique(substr(do.call(rbind, Gene_Total)[[1]], 1, 15))
+```
+
+```{r}
+stopifnot(identical(SampInfo_PolyA$donor_id, SampInfo_Total$donor_id))
+Gene_TPM <- list()
+for(i in 1:40){
+  tmp <- merge(Gene_PolyA[[i]][, c(1, 3)], Gene_Total[[i]][, c(1, 3)], by = "gene_id")
+  colnames(tmp)[2:3] <- c("PolyA", "Total")
+  Gene_TPM[[i]] <- tmp
+}
+
+gene_cor_RSEM <- mapply(Gene_TPM, FUN = function(x) cor(log1p(x[[2]]), log1p(x[[3]])))
+gene_num_RSEM <- mapply(1:40, FUN = function(i) nrow(merge(Gene_PolyA[[i]][, c(1, 3)], Gene_Total[[i]][, c(1, 3)], by = "gene_id")))
+```
+
+```{r}
+stopifnot(identical(names(Gene_PolyA), names(Gene_Total)))
+
+Cor_RSEM <- data.table(donor_id = names(Gene_PolyA), Num_PolyA = mapply(nrow, Gene_PolyA), Num_Total = mapply(nrow, Gene_Total), Num_Shared = gene_num_RSEM, Cor = round(gene_cor_RSEM, 3))
+
+DT::datatable(Cor_RSEM)
+```
+
+#### HTSeq
+```{r warning=FALSE, message=FALSE}
+suppressPackageStartupMessages(library(GenomicAlignments))
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+suppressPackageStartupMessages(library(DESeq2))
+
+colnames(se_PolyA) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(se_PolyA))
+colnames(se_Total) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(se_Total))
+stopifnot(identical(colnames(se_PolyA), SampInfo_PolyA$ID))
+colnames(se_PolyA) <- SampInfo_PolyA$donor_id
+stopifnot(identical(colnames(se_Total), SampInfo_Total$ID))
+colnames(se_Total) <- SampInfo_Total$donor_id
+```
+
+```{r}
+stopifnot(identical(colnames(se_PolyA), colnames(se_Total)))
+
+gene_cor_HTSeq <- vector()
+for(i in 1:40) {
+  se <- cbind(se_PolyA[,i], se_Total[,i])
+  dds <- DESeqDataSet(se, design = ~ 1)
+  dds <- dds[rowSums(counts(dds) >= 10) == 2, ]
+  dds <- estimateSizeFactors(dds)
+  dds <- estimateDispersions(dds)
+
+  ExpMat <- log1p(counts(dds, normalized = TRUE))
+  gene_cor_HTSeq[i] <- cor(ExpMat[,1], ExpMat[,2])
+}
+
+
+mapply(1:40, FUN = function(i) {
+  length(intersect(substring(names(which(assay(se_PolyA)[, i] >= 10)), 1, 15), substring(names(which(assay(se_Total)[, i] >= 10)), 1, 15)))
+}) -> gene_num_HTSeq
+
+Cor_HTSeq <- data.table(donor_id = colnames(se_PolyA), 
+                        Num_PolyA = apply(assay(se_PolyA), 2, function(x) sum(x >= 10)), 
+                        Num_Total = apply(assay(se_Total), 2, function(x) sum(x >= 10)), 
+                        Num_Shared = gene_num_HTSeq, 
+                        Cor = round(gene_cor_HTSeq, 3))
+DT::datatable(Cor_HTSeq)
+```
+
+#### ExonOnly
+```{r warning=FALSE, message=FALSE}
+Exon_PolyA <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_PolyA.txt")
+Exon_Total <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_Total.txt")
+Exon_PolyA <- Exon_PolyA[, SampInfo_PolyA$ID]
+Exon_Total <- Exon_Total[, SampInfo_Total$ID]
+
+stopifnot(identical(colnames(Exon_PolyA), SampInfo_PolyA$ID))
+stopifnot(identical(colnames(Exon_Total), SampInfo_Total$ID))
+stopifnot(identical(row.names(Exon_PolyA), row.names(Exon_Total)))
+
+gene_cor_ExonOnly <- vector()
+gene_num_ExonOnly <- vector()
+for(i in 1:40) {
+  se <- cbind(Exon_PolyA[,i], Exon_Total[,i])
+  dds <- DESeqDataSetFromMatrix(countData = as.matrix(se), colData = data.frame(Lib = c("PolyA", "Total")), design = ~ 1)
+  dds <- dds[rowSums(counts(dds) >= 10) == 2, ]
+  dds <- estimateSizeFactors(dds)
+  dds <- estimateDispersions(dds)
+
+  ExpMat <- log1p(counts(dds, normalized = TRUE))
+  gene_cor_ExonOnly[i] <- cor(ExpMat[,1], ExpMat[,2])
+  gene_num_ExonOnly[i] <- nrow(ExpMat)
+}
+
+colnames(Exon_PolyA) <- SampInfo_PolyA$donor_id
+colnames(Exon_Total) <- SampInfo_Total$donor_id
+stopifnot(identical(colnames(Exon_PolyA), colnames(Exon_Total)))
+
+
+Cor_Exon <- data.table(donor_id = colnames(Exon_PolyA), 
+                       Num_PolyA = apply(Exon_PolyA, 2, function(x) sum(x >= 10)), 
+                       Num_Total = apply(Exon_Total, 2, function(x) sum(x >= 10)), 
+                       Num_Shared = gene_num_ExonOnly, 
+                       Cor = round(gene_cor_ExonOnly, 3))
+DT::datatable(Cor_Exon)
+```
+
+#### Plot
+
+```{r}
+stopifnot(identical(names(Gene_PolyA), names(Gene_Total)))
+stopifnot(identical(colnames(se_PolyA), colnames(se_Total)))
+stopifnot(identical(colnames(Exon_PolyA), colnames(Exon_Total)))
+stopifnot(identical(names(Gene_PolyA), colnames(se_PolyA)))
+
+## RSEM
+
+Tab1 <- merge(Gene_PolyA[[2]][, c(1, 3)], Gene_Total[[2]][, c(1, 3)], by = "gene_id")
+colnames(Tab1)[2:3] <- c("RSEM_PolyA", "RSEM_Total")
+Tab1 <- setDF(Tab1[, -1], rownames = Tab1[[1]])
+Tab1 <- log1p(Tab1)
+
+## HTSeq
+
+stopifnot(identical(names(se_PolyA), names(se_Total)))
+
+library(DESeq2)
+Tab2 <- cbind(se_PolyA[, 2], se_Total[, 2])
+
+Tab2 <- DESeqDataSet(Tab2, design = ~ 1)
+Tab2 <- Tab2[rowSums(counts(Tab2) >= 10) == 2, ]
+Tab2 <- estimateSizeFactors(Tab2)
+Tab2 <- estimateDispersions(Tab2)
+Tab2 <- counts(Tab2, normalized = TRUE)
+Tab2 <- log1p(Tab2)
+row.names(Tab2) <- substr(row.names(Tab2), 1, 15)
+colnames(Tab2) <- c("HTSeq_PolyA", "HTSeq_Total")
+
+## ExonOnly
+
+Tab3 <- cbind(Exon_PolyA[, 2], Exon_Total[, 2])
+row.names(Tab3) <- row.names(Exon_PolyA)
+
+library(SummarizedExperiment)
+Tab3 <- DESeqDataSet(makeSummarizedExperimentFromExpressionSet(from = ExpressionSet(Tab3)), design = ~ 1)
+Tab3 <- Tab3[rowSums(counts(Tab3) >= 10) == 2, ]
+Tab3 <- estimateSizeFactors(Tab3)
+Tab3 <- estimateDispersions(Tab3)
+Tab3 <- counts(Tab3, normalized = TRUE)
+Tab3 <- log1p(Tab3)
+row.names(Tab3) <- substr(row.names(Tab3), 1, 15)
+colnames(Tab3) <- c("ExonOnly_PolyA", "ExonOnly_Total")
+
+comgen <- intersect(intersect(row.names(Tab1), row.names(Tab2)), row.names(Tab3))
+
+Tab <- cbind(Tab1[comgen, ], Tab2[comgen, ], Tab3[comgen, ])
+```
+
+```{r}
+options(scipen = 3)
+corrplot::corrplot(cor(Tab), method = "number", order = "hclust")
+```
+
+```{r}
+Mat <- data.frame(rbind(Cor_RSEM, Cor_HTSeq, Cor_Exon), Method = rep(c("RSEM", "HTSeq", "ExonOnly"), each = 40))
+
+Mat$Method <- factor(Mat$Method, levels = c("RSEM", "HTSeq", "ExonOnly"))
+```
+
+Number of PolyA identified gene
+
+```{r fig.width=6, fig.height=6}
+my_comparisons = list(c("RSEM", "HTSeq"), c("HTSeq", "ExonOnly"), c("RSEM", "ExonOnly"))
+
+ggplot(Mat, aes(x = Method, y = Num_PolyA, fill = Method)) +
+  geom_violin(alpha = .5) +
+  geom_boxplot(fill = "white", width = .2) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  labs(y = "No. identified gene") + 
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, size = 6) -> p1
+p1
+```
+
+Number of Total identified gene
+
+```{r fig.width=6, fig.height=6}
+ggplot(Mat, aes(x = Method, y = Num_Total, fill = Method)) +
+  geom_violin(alpha = .5) +
+  geom_boxplot(fill = "white", width = .2) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  labs(y = "No. identified gene") + 
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, size = 5) -> p2
+p2
+```
+
+Number of shared identified gene
+
+```{r fig.width=6, fig.height=6}
+ggplot(Mat, aes(x = Method, y = Num_Shared, fill = Method)) +
+  geom_violin(alpha = .5) +
+  geom_boxplot(fill = "white", width = .2) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  labs(y = "No. identified gene") + 
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, size = 5) -> p3
+p3
+```
+
+Correlation
+
+```{r fig.width=6, fig.height=6}
+ggplot(Mat, aes(x = Method, y = Cor, fill = Method)) +
+  geom_violin(alpha = .5) +
+  geom_boxplot(fill = "white", width = .2) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  labs(y = "Cor") + 
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, size = 6) -> p4
+p4
+```
+
+```{r fig.width=6, fig.height=6}
+Mat <- data.frame(rbind(Cor_HTSeq, Cor_Exon), Method = rep(c("HTSeq", "ExonOnly"), each = 40))
+
+Mat$Method <- factor(Mat$Method, levels = c("HTSeq", "ExonOnly"))
+
+my_comparisons <- list(c("HTSeq", "ExonOnly"))
+
+ggplot(Mat, aes(x = Method, y = Cor, fill = Method)) +
+  geom_violin(alpha = .8) + 
+  ylim(c(0.905, 0.95)) + 
+  geom_boxplot(fill = "white", width = .2) +
+  theme_classic() +
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_text(size = 16), 
+        axis.title.x = element_blank(), 
+        # axis.ticks.x = element_blank(), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.spacing.x = unit(0.5, 'cm'), 
+        legend.text = element_text(size = 16)) +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5) + 
+  labs(y = "Cor") + 
+  stat_compare_means(label = "p.format", comparisons = my_comparisons, size = 6)
+
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Comparison of identified genes2.pdf", width = 5, height = 5)
+```
+
+
+
+## Venn Diagram of different quantification methods {.tabset}
+
+```{r}
+stopifnot(identical(names(Gene_PolyA), names(Gene_Total)))
+
+PolyA_RSEM_Gene <- Reduce(union, lapply(Gene_PolyA, function(x) x$gene_id))
+Total_RSEM_Gene <- Reduce(union, lapply(Gene_Total, function(x) x$gene_id))
+
+PolyA_HTSeq_Gene <- Reduce(union, lapply(1:40, function(x) substring(names(which(assay(se_PolyA)[, i] >= 10)), 1, 15)))
+Total_HTSeq_Gene <- Reduce(union, lapply(1:40, function(x) substring(names(which(assay(se_Total)[, i] >= 10)), 1, 15)))
+
+PolyA_Exon_Gene <- Reduce(union, lapply(1:40, function(x) substring(row.names(Exon_PolyA)[which(Exon_PolyA[, i] >= 10)], 1, 15)))
+Total_Exon_Gene <- Reduce(union, lapply(1:40, function(x) substring(row.names(Exon_PolyA)[which(Exon_Total[, i] >= 10)], 1, 15)))
+
+PolyA_Gene <- list(RSEM = PolyA_RSEM_Gene, ExonOnly = PolyA_Exon_Gene, HTSeq = PolyA_HTSeq_Gene)
+Total_Gene <- list(RSEM = Total_RSEM_Gene, ExonOnly = Total_Exon_Gene, HTSeq = Total_HTSeq_Gene)
+Shared_Gene <- list(RSEM = intersect(PolyA_RSEM_Gene, Total_RSEM_Gene), 
+                    ExonOnly = intersect(PolyA_Exon_Gene, Total_Exon_Gene), 
+                    HTSeq = intersect(PolyA_HTSeq_Gene, Total_HTSeq_Gene))
+```
+
+PolyA expressed gene
+```{r}
+mapply(length, PolyA_Gene)
+```
+
+Total expressed gene
+```{r}
+mapply(length, Total_Gene)
+```
+
+Shared expressed gene
+
+```{r}
+mapply(length, Shared_Gene)
+```
+
+### PolyA
+
+```{r}
+library(Vennerable)
+Vennerable::plot(Venn(PolyA_Gene), doWeights = FALSE)
+```
+
+### Total
+
+```{r}
+Vennerable::plot(Venn(Total_Gene), doWeights = FALSE)
+```
+
+### Shared
+
+```{r}
+Vennerable::plot(Venn(Shared_Gene), doWeights = FALSE)
+```
+
+```{r}
+openxlsx::write.xlsx(list(Cor_RSEM, Cor_HTSeq, Cor_Exon), "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Comparison of identified genes.xlsx")
+ggsave(plot = p4, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Comparison of identified genes.pdf", width = 6, height = 6)
+```
+
+
+## Heat scatter plot {.tabset}
+
+```{r}
+ggheatscatter <- function(x, y, xlab, ylab, title = NULL, subtitle = NULL) {
+  data <- data.frame(x = x, y = y)
+  ggplot(data = data, aes(x = x, y = y)) + 
+  geom_point(size = .1) +
+  stat_density2d(geom = "raster", aes(fill = ..density.., alpha = ..density..), contour = FALSE) +
+  scale_fill_viridis_c(guide = FALSE) +
+  scale_alpha_continuous(guide = "none", range = c(0, 1)) +
+  labs(x = xlab, y = ylab, title = title, subtitle = subtitle) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "none")
+}
+```
+
+
+### HTSeq 
+```{r}
+library(GenomicAlignments)
+library(DESeq2)
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+
+i = 2
+Mat <- cbind(se_PolyA[,i], se_Total[, i])
+colnames(Mat) <- c("PolyA", "Total")
+
+Mat <- DESeqDataSet(Mat, design = ~ 1)
+Mat <- Mat[rowSums(counts(Mat) >= 1) >= 1, ]
+Mat <- estimateSizeFactors(Mat)
+Mat <- estimateDispersions(Mat)
+Mat <- counts(Mat, normalized = TRUE)
+Mat <- log1p(Mat)
+```
+
+```{r}
+Mat_HTSeq <- data.frame(Mat)
+p5 <- ggheatscatter(x = Mat_HTSeq$PolyA, y = Mat_HTSeq$Total, xlab = "PolyA", ylab = "Total", title = "HTSeq", subtitle = "log1p(count)")
+```
+
+```{r}
+Mat <- cbind(se_PolyA[,i], se_Total[, i])
+colnames(Mat) <- c("PolyA", "Total")
+
+Mat <- DESeqDataSet(Mat, design = ~ 1)
+Mat <- Mat[rowSums(counts(Mat) >= 10) == 2, ]
+Mat <- estimateSizeFactors(Mat)
+Mat <- estimateDispersions(Mat)
+Mat <- counts(Mat, normalized = TRUE)
+Mat <- log1p(Mat)
+Mat_HTSeq2 <- data.frame(Mat)
+```
+
+```{r}
+p5_2 <- ggheatscatter(x = Mat_HTSeq2$PolyA, y = Mat_HTSeq2$Total, xlab = "PolyA", ylab = "Total", title = "HTSeq", subtitle = "log1p(count)") + 
+  xlim(c(0, max(Mat_HTSeq2))) + 
+  ylim(c(0, max(Mat_HTSeq2)))
+```
+
+
+```{r fig.width=10, fig.height=5}
+cowplot::plot_grid(p5, p5_2, nrow = 1)
+```
+
+### RSEM
+
+```{r}
+
+# loading PolyA RNA
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+names(Gene_PolyA) <- SampInfo_PolyA$donor_id
+
+# loading Total RNA
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+names(Gene_Total) <- SampInfo_Total$donor_id
+
+stopifnot(identical(names(Gene_PolyA), names(Gene_Total)))
+
+i = 2
+
+Mat <- merge(Gene_PolyA[[i]], Gene_Total[[i]], by = "gene_id")[, .(gene_id, TPM.x, TPM.y)]
+Mat <- setDF(Mat[, -1], rownames = Mat[[1]])
+colnames(Mat) <- c("PolyA", "Total")
+
+Mat <- Mat[rowSums(Mat) > 0, ]
+Mat <- log1p(Mat)
+```
+
+```{r}
+Mat_RSEM <- data.frame(Mat)
+p6 <- ggheatscatter(x = Mat_RSEM$PolyA, y = Mat_RSEM$Total, xlab = "PolyA", ylab = "Total", title = "RSEM", subtitle = "log1p(TPM)")
+```
+
+```{r}
+sg <- intersect(Gene_Total[[2]][expected_count >= 10, gene_id], 
+                Gene_PolyA[[2]][expected_count >= 10, gene_id])
+Mat_RSEM2 <- Mat_RSEM[sg, ]
+```
+
+```{r}
+p6_2 <- ggheatscatter(x = Mat_RSEM2$PolyA, y = Mat_RSEM2$Total, xlab = "PolyA", ylab = "Total", title = "HTSeq", subtitle = "log1p(TPM)") + 
+  xlim(c(0, max(Mat_RSEM2))) + 
+  ylim(c(0, max(Mat_RSEM2)))
+```
+
+
+```{r fig.width=10, fig.height=5}
+cowplot::plot_grid(p6, p6_2, nrow = 1)
+```
+
+### ExonOnly
+
+```{r}
+Exon_PolyA <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_PolyA.txt")
+Exon_Total <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_Total.txt")
+Exon_PolyA <- Exon_PolyA[, SampInfo_PolyA$ID]
+Exon_Total <- Exon_Total[, SampInfo_Total$ID]
+
+stopifnot(identical(colnames(Exon_PolyA), SampInfo_PolyA$ID))
+stopifnot(identical(colnames(Exon_Total), SampInfo_Total$ID))
+stopifnot(identical(row.names(Exon_PolyA), row.names(Exon_Total)))
+
+colnames(Exon_PolyA) <- SampInfo_PolyA$donor_id
+colnames(Exon_Total) <- SampInfo_Total$donor_id
+stopifnot(identical(colnames(Exon_PolyA), colnames(Exon_Total)))
+
+stopifnot(identical(rownames(Exon_PolyA), rownames(Exon_Total)))
+
+i = 2
+Mat <- cbind(Exon_PolyA[,i], Exon_Total[, i])
+colnames(Mat) <- c("PolyA", "Total")
+row.names(Mat) <- row.names(Exon_PolyA)
+
+library(SummarizedExperiment)
+Mat <- DESeqDataSet(makeSummarizedExperimentFromExpressionSet(from = ExpressionSet(Mat)), design = ~ 1)
+Mat <- Mat[rowSums(counts(Mat) >= 1) >= 1, ]
+Mat <- estimateSizeFactors(Mat)
+Mat <- estimateDispersions(Mat)
+Mat <- counts(Mat, normalized = TRUE)
+Mat <- log1p(Mat)
+```
+
+```{r}
+Mat_ExonOnly <- data.frame(Mat)
+p7 <- ggheatscatter(x = Mat_ExonOnly$PolyA, y = Mat_ExonOnly$Total, xlab = "PolyA", ylab = "Total", title = "RSEM", subtitle = "log1p(count)")
+```
+
+
+```{r}
+sg <- rownames(Exon_PolyA)[which(Exon_PolyA[[i]] >= 10 & Exon_Total[[i]] >= 10)]
+Mat_ExonOnly2 <- Mat_ExonOnly[sg, ]
+```
+
+```{r}
+p7_2 <- ggheatscatter(x = Mat_ExonOnly2$PolyA, y = Mat_ExonOnly2$Total, xlab = "PolyA", ylab = "Total", title = "HTSeq", subtitle = "log1p(count)") + 
+  xlim(c(0, max(Mat_ExonOnly2))) + 
+  ylim(c(0, max(Mat_ExonOnly2)))
+```
+
+```{r fig.width=10, fig.height=5}
+cowplot::plot_grid(p7, p7_2, nrow = 1)
+```
+
+
+```{r}
+ggsave(plot = p5, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/HTSeq scatter plot.pdf", width = 6, height = 6)
+ggsave(plot = p6, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/RSEM scatter plot.pdf", width = 6, height = 6)
+ggsave(plot = p7, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/ExonOnly scatter plot.pdf", width = 6, height = 6)
+
+ggsave(plot = p5_2, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/HTSeq scatter plot2.pdf", width = 6, height = 6)
+ggsave(plot = p6_2, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/RSEM scatter plot2.pdf", width = 6, height = 6)
+ggsave(plot = p7_2, filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/ExonOnly scatter plot2.pdf", width = 6, height = 6)
+```
+
+
+## Correlation between sequence depth and identified gene {.tabset}
+
+### RSEM
+```{r}
+LibSize_PolyA <- mapply(Gene_PolyA, FUN = function(x) sum(x[[2]]))
+No.Gene_PolyA <- mapply(Gene_PolyA, FUN = function(x) nrow(x[expected_count >= 10, ]))
+
+LibSize_Total <- mapply(Gene_Total, FUN = function(x) sum(x[[2]]))
+No.Gene_Total <- mapply(Gene_Total, FUN = function(x) nrow(x[expected_count >= 10, ]))
+
+DepGen_RSEM <- rbind(data.frame(Gene = No.Gene_PolyA, 
+                                LibSize = LibSize_PolyA, 
+                                Library = "PolyA"), 
+                     data.frame(Gene = No.Gene_Total, 
+                                LibSize = LibSize_Total, 
+                                Library = "Total"))
+library(cowplot)
+library(ggpmisc)
+ggplot(DepGen_RSEM, aes(x = LibSize, y = Gene, color = DepGen_RSEM$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  # stat_poly_eq(formula = y ~ x,
+  #              aes(label = ..eq.label..),
+  #              label.y = "bottom", 
+  #              label.x = "right", 
+  #              size = 6,
+  #              parse = TRUE) +
+  stat_cor(data = DepGen_RSEM[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p8
+```
+
+```{r fig.height=5, fig.width=5}
+p8 + theme(plot.margin = unit(c(1, 1, 1, 1), "cm"))
+```
+
+
+### HTSeq
+
+```{r}
+colnames(se_PolyA) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(se_PolyA))
+colnames(se_Total) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(se_Total))
+stopifnot(identical(colnames(se_PolyA), SampInfo_PolyA$ID))
+colnames(se_PolyA) <- SampInfo_PolyA$donor_id
+stopifnot(identical(colnames(se_Total), SampInfo_Total$ID))
+colnames(se_Total) <- SampInfo_Total$donor_id
+
+stopifnot(identical(colnames(se_Total), colnames(se_PolyA)))
+stopifnot(identical(colnames(se_Total), Cor_HTSeq$donor_id))
+
+Mat <- rbind(data.frame(Gene = Cor_HTSeq$Num_PolyA, 
+                        LibSize = colSums(assay(se_PolyA)), 
+                        Library = "PolyA"), 
+             data.frame(Gene = Cor_HTSeq$Num_Total, 
+                        LibSize = colSums(assay(se_Total)), 
+                        Library = "Total"))
+DepGen_HTSeq <- Mat
+```
+
+```{r}
+ggplot(DepGen_HTSeq, aes(x = LibSize, y = Gene, color = DepGen_HTSeq$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  # stat_poly_eq(formula = y ~ x,
+  #              aes(label = ..eq.label..),
+  #              label.y = "bottom", 
+  #              label.x = "right", 
+  #              size = 6,
+  #              parse = TRUE) +
+  stat_cor(data = DepGen_HTSeq[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p9
+```
+
+```{r fig.height=5, fig.width=5}
+p9 + theme(plot.margin = unit(c(1, 1, 1, 1), "cm"))
+```
+
+### ExonOnly
+
+```{r}
+stopifnot(identical(colnames(Exon_PolyA), Cor_Exon$donor_id))
+stopifnot(identical(row.names(Exon_PolyA), row.names(Exon_Total)))
+
+Mat <- rbind(data.frame(Gene = Cor_Exon$Num_PolyA, 
+                        LibSize = colSums(Exon_PolyA), 
+                        Library = "PolyA"), 
+             data.frame(Gene = Cor_Exon$Num_Total, 
+                        LibSize = colSums(Exon_Total), 
+                        Library = "Total"))
+DepGen_Exon <- Mat
+```
+
+```{r}
+ggplot(DepGen_Exon, aes(x = LibSize, y = Gene, color = DepGen_Exon$Library)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  scale_color_manual(values = c(col.p, col.t))+
+  guides(color = FALSE)+ 
+  labs(x = "Sequencing Depth", 
+       y = "No. genes")+
+  theme_cowplot()+ 
+  theme(axis.title = element_text(size = 16))+
+  # stat_poly_eq(formula = y ~ x,
+  #              aes(label = ..eq.label..),
+  #              label.y = "bottom", 
+  #              label.x = "right", 
+  #              size = 6,
+  #              parse = TRUE) +
+  stat_cor(data = DepGen_Exon[, 1:2], 
+           method = "pearson", 
+           size = 4, label.y.npc = "bottom", label.x.npc = "center") -> p10
+```
+
+```{r fig.height=5, fig.width=5}
+p10 + theme(plot.margin = unit(c(1, 1, 1, 1), "cm"))
+```
+
+```{r}
+ggsave(plot = p8 + theme(plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")), 
+       filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Correlation between sequence depth and identified genes RSEM.pdf", width = 6, height = 6)
+ggsave(plot = p9 + theme(plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")), 
+       filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Correlation between sequence depth and identified genes HTSeq.pdf", width = 6, height = 6)
+ggsave(plot = p10 + theme(plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")), 
+       filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Correlation between sequence depth and identified genes ExonOnly.pdf", width = 6, height = 6)
+```
+
+
+## Venn Diagram of different library methods {.tabset}
+
+### Union
+
+```{r}
+stopifnot(identical(names(Gene_PolyA), names(Gene_Total)))
+
+PolyA_RSEM_Gene <- Reduce(union, lapply(Gene_PolyA, function(x) x[expected_count >= 10, substr(gene_id, 1, 15)]))
+Total_RSEM_Gene <- Reduce(union, lapply(Gene_Total, function(x) x[expected_count >= 10, substr(gene_id, 1, 15)]))
+
+PolyA_HTSeq_Gene <- Reduce(union, lapply(1:40, function(x) substring(names(which(assay(se_PolyA)[, i] >= 10)), 1, 15)))
+Total_HTSeq_Gene <- Reduce(union, lapply(1:40, function(x) substring(names(which(assay(se_Total)[, i] >= 10)), 1, 15)))
+
+PolyA_Exon_Gene <- Reduce(union, lapply(1:40, function(x) substring(row.names(Exon_PolyA)[which(Exon_PolyA[, i] >= 10)], 1, 15)))
+Total_Exon_Gene <- Reduce(union, lapply(1:40, function(x) substring(row.names(Exon_PolyA)[which(Exon_Total[, i] >= 10)], 1, 15)))
+```
+
+```{r}
+library(ggforce)
+VennFun <- function(input, col1 = NULL, col2 = NULL, sizeTitle = 6, sizeLabel = 4) {
+  lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+  lab2 <- length(intersect(input[[1]], input[[2]]))
+  lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+  
+  if(is.null(col1)) col1 <- RColorBrewer::brewer.pal(n = 3, name = "Dark2")[1]
+  if(is.null(col2)) col2 <- RColorBrewer::brewer.pal(n = 3, name = "Dark2")[2]
+  
+  ggplot() + ggforce::geom_circle(aes(x0 = c(-1, 1), 
+                             y0 = c(0, 0), 
+                             r = c(2, 2), 
+                             color = c(col1, col2), 
+                             fill = c(col1, col2)), 
+                         lwd = 1.5, 
+                         alpha = .1)+
+    guides(color = F, fill = F, alpha = F)+
+    scale_fill_manual(values = c(col1, col2)) +
+    scale_color_manual(values = c(col1, col2)) +
+    # theme_no_axes() + 
+    theme(line = element_blank(), 
+          axis.text = element_blank(), 
+          axis.title = element_blank(), 
+          panel.background = element_blank()) + 
+    # theme_nothing() + 
+    ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = sizeLabel) + 
+    ggplot2::annotate("text", x = c(-1, 1), y = 2.4, label = names(input), size = sizeTitle)
+}
+```
+
+```{r}
+p11 <- VennFun(input = list(PolyA = PolyA_RSEM_Gene, Total = Total_RSEM_Gene), col1 = col.p, col2 = col.t)
+p12 <- VennFun(input = list(PolyA = PolyA_HTSeq_Gene, Total = Total_HTSeq_Gene), col1 = col.p, col2 = col.t)
+p13 <- VennFun(input = list(PolyA = PolyA_Exon_Gene, Total = Total_Exon_Gene), col1 = col.p, col2 = col.t)
+```
+
+```{r fig.height=2.6, fig.width=9}
+cowplot::plot_grid(p11 + labs(title = "RSEM"), 
+                   p12 + labs(title = "HTSeq"), 
+                   p13 + labs(title = "ExonOnly"), 
+                   nrow = 1)
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Venn plot of identified gene union.pdf", width = 9, height = 2.6)
+```
+
+### Intersect
+
+```{r}
+stopifnot(identical(names(Gene_PolyA), names(Gene_Total)))
+
+PolyA_RSEM_Gene1 <- Reduce(intersect, lapply(Gene_PolyA, function(x) x[expected_count >= 10, substr(gene_id, 1, 15)]))
+Total_RSEM_Gene1 <- Reduce(intersect, lapply(Gene_Total, function(x) x[expected_count >= 10, substr(gene_id, 1, 15)]))
+
+PolyA_HTSeq_Gene1 <- Reduce(intersect, lapply(1:40, function(x) substring(names(which(assay(se_PolyA)[, i] >= 10)), 1, 15)))
+Total_HTSeq_Gene1 <- Reduce(intersect, lapply(1:40, function(x) substring(names(which(assay(se_Total)[, i] >= 10)), 1, 15)))
+
+PolyA_Exon_Gene1 <- Reduce(intersect, lapply(1:40, function(x) substring(row.names(Exon_PolyA)[which(Exon_PolyA[, i] >= 10)], 1, 15)))
+Total_Exon_Gene1 <- Reduce(intersect, lapply(1:40, function(x) substring(row.names(Exon_PolyA)[which(Exon_Total[, i] >= 10)], 1, 15)))
+```
+
+```{r}
+p14 <- VennFun(input = list(PolyA = PolyA_RSEM_Gene1, Total = Total_RSEM_Gene1), col1 = col.p, col2 = col.t)
+p15 <- VennFun(input = list(PolyA = PolyA_HTSeq_Gene1, Total = Total_HTSeq_Gene1), col1 = col.p, col2 = col.t)
+p16 <- VennFun(input = list(PolyA = PolyA_Exon_Gene1, Total = Total_Exon_Gene1), col1 = col.p, col2 = col.t)
+```
+
+```{r fig.height=2.6, fig.width=9}
+cowplot::plot_grid(p14 + labs(title = "RSEM"), 
+                   p15 + labs(title = "HTSeq"), 
+                   p16 + labs(title = "ExonOnly"), 
+                   nrow = 1)
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Venn plot of identified gene intersect.pdf", width = 9, height = 2.6)
+```
+
+
+## Gene biotype
+```{r}
+gtf <- rtracklayer::readGFF("/mnt/raid61/Personal_data/tangchao/Document/gencode/human/GRCh37/gencode.v30lift37.annotation.gtf")
+setDT(gtf)
+gtf <- gtf[type == "gene", .(seqid, type, start, end, strand, gene_id, gene_type, gene_name)]
+gtf[, gene_id := substr(gene_id, 1, 15)]
+setkey(gtf, gene_id)
+```
+
+### Union {.tabset}
+
+#### RSEM
+```{r}
+input <- list(PolyA = PolyA_RSEM_Gene, Total = Total_RSEM_Gene)
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(gene_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(gene_type)])
+mat3 <- data.frame(gtf[Common_gene, table(gene_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, gene_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = gene_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Gene biotype of RSEM Union.pdf", width = 6, height = 5)
+```
+
+#### HTSeq
+```{r}
+input <- list(PolyA = PolyA_HTSeq_Gene, Total = Total_HTSeq_Gene)
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(gene_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(gene_type)])
+mat3 <- data.frame(gtf[Common_gene, table(gene_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, gene_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = gene_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Gene biotype of HTSeq Union.pdf", width = 6, height = 5)
+```
+
+#### ExonOnly
+```{r}
+input <- list(PolyA = PolyA_Exon_Gene, Total = Total_Exon_Gene)
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(gene_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(gene_type)])
+mat3 <- data.frame(gtf[Common_gene, table(gene_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, gene_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = gene_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Gene biotype of ExonOnly Union.pdf", width = 6, height = 5)
+```
+
+
+
+### Intersect {.tabset}
+
+#### RSEM
+```{r}
+input <- list(PolyA = PolyA_RSEM_Gene1, Total = Total_RSEM_Gene1)
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(gene_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(gene_type)])
+mat3 <- data.frame(gtf[Common_gene, table(gene_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, gene_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = gene_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Gene biotype of RSEM Intersect.pdf", width = 6, height = 5)
+```
+
+#### HTSeq
+```{r}
+input <- list(PolyA = PolyA_HTSeq_Gene1, Total = Total_HTSeq_Gene1)
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(gene_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(gene_type)])
+mat3 <- data.frame(gtf[Common_gene, table(gene_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, gene_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = gene_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Gene biotype of HTSeq Intersect.pdf", width = 6, height = 5)
+```
+
+#### ExonOnly
+```{r}
+input <- list(PolyA = PolyA_Exon_Gene1, Total = Total_Exon_Gene1)
+
+PolyA_only_gene <- with(input, setdiff(PolyA, Total))
+Total_only_gene <- with(input, setdiff(Total, PolyA))
+Common_gene <- with(input, intersect(Total, PolyA))
+
+mat1 <- data.frame(gtf[PolyA_only_gene, table(gene_type)])
+mat2 <- data.frame(gtf[Total_only_gene, table(gene_type)])
+mat3 <- data.frame(gtf[Common_gene, table(gene_type)])
+
+mat1$Percen <- mat1$Freq/sum(mat1$Freq) * 100
+mat2$Percen <- mat2$Freq/sum(mat2$Freq) * 100
+mat3$Percen <- mat3$Freq/sum(mat3$Freq) * 100
+mat1$Type <- "PolyA-specific"
+mat2$Type <- "Total-specific"
+mat3$Type <- "Common"
+
+mat1 <- mat1[mat1$Percen >= 5, ]
+mat2 <- mat2[mat2$Percen >= 5, ]
+mat3 <- mat3[mat3$Percen >= 5, ]
+
+Mat <- rbind(mat1, mat2, mat3)
+setDT(Mat)
+# Mat <- Mat[gene_type != "antisense", ]
+setkey(Mat, gene_type, Type)
+Mat[, Percen := .SD[, Freq/sum(Freq) * 100], by = Type]
+Mat[, Type := factor(Type, levels = c("PolyA-specific", "Total-specific", "Common"))]
+```
+
+```{r }
+ggplot(Mat, aes(x = gene_type, y = Percen, fill = Type)) + 
+  geom_bar(stat = "identity", color = NA, 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage") + 
+  scale_fill_manual(values = c(col.p, col.t, RColorBrewer::brewer.pal(3, "Dark2")[1])) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), 
+        legend.position = "top", 
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 30, hjust = 1)) -> p17
+
+od <- ggplot_build(p17)$data[[1]]$group
+
+p17 + annotate(geom = "text", x = sort(ggplot_build(p17)$data[[1]]$x), y = Mat$Percen[order(od)] + 3, label = round(Mat$Percen[order(od)], 1)) -> p17_2
+```
+
+```{r fig.width=6, fig.height=5}
+p17_2
+ggsave(filename = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/20200608/Gene biotype of ExonOnly Intersect.pdf", width = 6, height = 5)
+```
+

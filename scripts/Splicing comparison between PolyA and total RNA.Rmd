@@ -1,0 +1,260 @@
+---
+title: "Splicing comparison between PolyA and total RNA"
+author: "Chao Tang"
+date: 'Report created: `r Sys.Date()`'
+output: 
+  html_document: 
+    code_folding: "hide"
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+## Preparation
+
+```{r}
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+library(data.table)
+library(reshape2)
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+
+PSI_PolyA <- readRDS("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/junction/PolyA_intron-centric_PSI.Rds")
+PSI_PolyA <- PSI_PolyA[, SampInfo_PolyA$donor_id]
+stopifnot(identical(colnames(PSI_PolyA), SampInfo_PolyA$donor_id))
+
+PSI_Total <- readRDS("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/junction/Total_intron-centric_PSI.Rds")
+PSI_Total <- PSI_Total[, SampInfo_Total$donor_id]
+stopifnot(identical(colnames(PSI_Total), SampInfo_Total$donor_id))
+```
+
+## Raw PSI comparison
+```{r}
+psi <- merge(melt.data.table(setDT(PSI_PolyA, keep.rownames = "IR"), variable.name = "Donor", value.name = "PolyA"), 
+             melt.data.table(setDT(PSI_Total, keep.rownames = "IR"), variable.name = "Donor", value.name = "Total"), by = c("IR", "Donor"))
+NA_Stat <- matrix(c(sum(is.na(psi$PolyA)), sum(is.na(psi$Total)), mean(is.na(psi$PolyA)), mean(is.na(psi$Total))), 
+                  nrow = 2, dimnames = list(c("PolyA", "Total"), c("NA(Frequency)", "NA(Fraction)")))
+NA_Stat
+```
+
+Correlation test
+```{r}
+psi <- psi[which(rowSums(psi[, 3:4]) > 0), ]
+
+with(psi, cor.test(PolyA, Total))
+```
+
+```{r fig.width=4, fig.height=4}
+library(LSD)
+heatscatter(psi$PolyA, psi$Total, colpal = "spectral", cor = TRUE, add.contour = TRUE, xlab = "PolyA", ylab = "Total")
+abline(a = 0, b = 1)
+```
+
+## PSI comparison after PEER {.tabset}
+
+### All SJs
+
+```{r}
+library(peer)
+mypeer <- function(expre, HidenFactor = 10) {
+  if(!"peer" %in% loadedNamespaces()) library(peer)
+  model = PEER()
+  PEER_setPhenoMean(model, as.matrix(expre))
+  PEER_setNk(model, HidenFactor)
+  PEER_getNk(model)
+  PEER_setAdd_mean(model, TRUE)
+  PEER_setNmax_iterations(model, 10000000)
+  PEER_update(model)
+  
+  factors = PEER_getX(model)
+  dim(factors)
+  weights = PEER_getW(model)
+  dim(weights)
+  precision = PEER_getAlpha(model)
+  dim(precision)
+  residuals = PEER_getResiduals(model)
+  dim(residuals)
+  #plot(precision)
+  # expre_adjust <- mean(rowMeans(expre)) + residuals
+  expre_adjust <- residuals
+  colnames(expre_adjust) <- colnames(expre)
+  rownames(expre_adjust) <- rownames(expre)
+  
+  return(t(expre_adjust))
+}
+```
+
+```{r}
+PSI_PolyA <- readRDS("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/junction/PolyA_intron-centric_PSI.Rds")
+PSI_PolyA[is.na(PSI_PolyA)] <- 0
+PSI_PolyA <- PSI_PolyA[, SampInfo_PolyA$donor_id]
+stopifnot(identical(colnames(PSI_PolyA), SampInfo_PolyA$donor_id))
+
+PSI_Total <- readRDS("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/junction/Total_intron-centric_PSI.Rds")
+PSI_Total[is.na(PSI_Total)] <- 0
+PSI_Total <- PSI_Total[, SampInfo_Total$donor_id]
+stopifnot(identical(colnames(PSI_Total), SampInfo_Total$donor_id))
+
+PSI_PolyA <- mypeer(expre = t(PSI_PolyA))
+PSI_Total <- mypeer(expre = t(PSI_Total))
+```
+
+```{r}
+psi_peer <- merge(melt.data.table(setDT(data.frame(PSI_PolyA), keep.rownames = "IR"), variable.name = "Donor", value.name = "PolyA"), 
+                  melt.data.table(setDT(data.frame(PSI_Total), keep.rownames = "IR"), variable.name = "Donor", value.name = "Total"), by = c("IR", "Donor"))
+```
+
+Correlation test
+```{r}
+with(psi_peer, cor.test(PolyA, Total))
+```
+
+```{r fig.width=4, fig.height=4}
+library(LSD)
+heatscatter(psi_peer$PolyA, psi_peer$Total, colpal = "spectral", cor = TRUE, add.contour = TRUE, xlab = "PolyA", ylab = "Total")
+abline(a = 0, b = 1)
+```
+
+### Shared SJ
+
+```{r}
+# PolyA
+
+PSI_PolyA <- readRDS("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/junction/PolyA_intron-centric_PSI.Rds")
+PSI_PolyA[is.na(PSI_PolyA)] <- 0
+PSI_PolyA <- PSI_PolyA[, SampInfo_PolyA$donor_id]
+
+# Total
+
+PSI_Total <- readRDS("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/junction/Total_intron-centric_PSI.Rds")
+PSI_Total[is.na(PSI_Total)] <- 0
+PSI_Total <- PSI_Total[, SampInfo_Total$donor_id]
+
+## intersect
+
+common_SJ <- intersect(row.names(PSI_PolyA), row.names(PSI_Total))
+
+PSI_PolyA <- PSI_PolyA[common_SJ, ]
+PSI_Total <- PSI_Total[common_SJ, ]
+
+## PEER
+
+PSI_PolyA <- mypeer(expre = t(PSI_PolyA))
+PSI_Total <- mypeer(expre = t(PSI_Total))
+```
+
+
+```{r}
+psi_peer <- merge(melt.data.table(setDT(data.frame(PSI_PolyA), keep.rownames = "IR"), variable.name = "Donor", value.name = "PolyA"), 
+                  melt.data.table(setDT(data.frame(PSI_Total), keep.rownames = "IR"), variable.name = "Donor", value.name = "Total"), by = c("IR", "Donor"))
+```
+
+Correlation test
+```{r}
+with(psi_peer, cor.test(PolyA, Total))
+```
+
+```{r fig.width=4, fig.height=4}
+library(LSD)
+heatscatter(psi_peer$PolyA, psi_peer$Total, colpal = "spectral", cor = TRUE, add.contour = TRUE, xlab = "PolyA", ylab = "Total")
+abline(a = 0, b = 1)
+```
+
+## sQTL
+
+```{r}
+library(MatrixEQTL)
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/MatrixEQTL/SharedSJ_PSI_Total_QTL.RData")
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/analysis/MatrixEQTL/SharedSJ_PSI_PolyA_QTL.RData")
+```
+
+```{r}
+PSI_PolyA_cis <- as.data.table(PSI_PolyA_QTL$cis$eqtls)
+PSI_PolyA_cis[, snps:=as.character(snps)]
+PSI_PolyA_cis[, gene:=as.character(gene)]
+PSI_Total_cis <- as.data.table(PSI_Total_QTL$cis$eqtls)
+PSI_Total_cis[, snps:=as.character(snps)]
+PSI_Total_cis[, gene:=as.character(gene)]
+```
+
+```{r}
+sQTL <- merge(PSI_PolyA_cis, PSI_Total_cis, by = c("gene", "snps"))
+colnames(sQTL) <- gsub(".y$", ".Total", gsub(".x$", ".PolyA", colnames(sQTL)))
+```
+
+### Correlation test
+
+#### All pairs
+
+pvalue
+```{r}
+with(sQTL, cor.test(pvalue.PolyA, pvalue.Total))
+```
+
+-log10(pvalue)
+```{r}
+with(sQTL, cor.test(-log10(pvalue.PolyA), -log10(pvalue.Total)))
+```
+
+beta
+```{r}
+with(sQTL, cor.test(beta.PolyA, beta.Total))
+```
+
+#### Significant only
+
+pvalue
+```{r}
+sQTL_Sig <- sQTL[FDR.PolyA < 0.05 | FDR.Total < 0.05, ]
+with(sQTL_Sig, cor.test(pvalue.PolyA, pvalue.Total))
+```
+
+-log10(pvalue)
+```{r}
+with(sQTL_Sig, cor.test(-log10(pvalue.PolyA), -log10(pvalue.Total)))
+```
+
+```{r fig.width=4, fig.height=4}
+heatscatter(-log10(sQTL_Sig$pvalue.PolyA), -log10(sQTL_Sig$pvalue.Total), colpal = "spectral", cor = TRUE, add.contour = TRUE, xlab = "PolyA", ylab = "Total")
+abline(a = 0, b = 1)
+```
+
+
+beta
+```{r}
+with(sQTL_Sig, cor.test(beta.PolyA, beta.Total))
+```
+
+```{r fig.width=4, fig.height=4}
+library(LSD)
+heatscatter(sQTL_Sig$beta.PolyA, sQTL_Sig$beta.Total, colpal = "spectral", cor = TRUE, add.contour = TRUE, xlab = "PolyA", ylab = "Total")
+abline(a = 0, b = 1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

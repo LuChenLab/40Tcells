@@ -1,0 +1,104 @@
+---
+title: "Fig.3 Correlation between different library"
+author: "Chao Tang"
+date: "9/25/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+```
+
+```{r}
+stopifnot(is.element("ggstatsplot", installed.packages()))
+```
+
+### Content
+
+
+### Preparation
+```{r}
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+library(ggplot2)
+library(data.table)
+suppressPackageStartupMessages(library(ggstatsplot))
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+```{r}
+library(GenomicAlignments)
+library(DESeq2)
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+
+i = 2
+Mat <- cbind(se_PolyA[,i], se_Total[, i])
+colnames(Mat) <- c("PolyA", "Total")
+
+Mat <- DESeqDataSet(Mat, design = ~ 1)
+Mat <- Mat[rowSums(counts(Mat) >= 1) >= 1, ]
+Mat <- estimateSizeFactors(Mat)
+Mat <- estimateDispersions(Mat)
+Mat <- counts(Mat, normalized = TRUE)
+Mat <- log2(1 + Mat)
+```
+
+```{r}
+ggplot(data = data.frame(Mat), aes(x = PolyA, y = Total)) + 
+  geom_point(size = .1)+
+  stat_density2d(geom="raster", aes(fill=..density.., alpha=..density..), contour=FALSE) +
+  scale_fill_viridis_c(guide = FALSE) +
+  scale_alpha_continuous(guide="none", range=c(0,1))+
+  labs(x = "PolyA", y = "Total", title = "Normalized gene expression")+
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), legend.position = "none") -> p1
+```
+
+```{r}
+Mat <- cbind(se_PolyA[,i], se_Total[, i])
+colnames(Mat) <- c("PolyA", "Total")
+
+Mat <- DESeqDataSet(Mat, design = ~ 1)
+Mat <- Mat[rowSums(counts(Mat) >= 10) >= 1, ]
+Mat <- estimateSizeFactors(Mat)
+Mat <- estimateDispersions(Mat)
+Mat <- counts(Mat, normalized = TRUE)
+Mat <- log2(1 + Mat)
+
+ggplot(data = data.frame(Mat), aes(x = PolyA, y = Total)) + 
+  geom_point(size = .1)+
+  stat_density2d(geom="raster", aes(fill=..density.., alpha=..density..), contour=FALSE) +
+  scale_fill_viridis_c(guide = FALSE) +
+  scale_alpha_continuous(guide="none", range=c(0,1))+
+  labs(x = "PolyA", y = "Total", title = "Normalized gene expression")+
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), legend.position = "none") -> p2
+```
+
+```{r fig.width=10, fig.height=5}
+ggstatsplot::combine_plots(
+  p1,
+  p2,
+  ncol = 2, 
+  # labels = c("RSEM", "HTSeq")
+  # title.text = "HTSeq identified gene",
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  caption.color = "blue"
+)
+```
+
+
+
+
+

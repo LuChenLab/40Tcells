@@ -1,0 +1,250 @@
+---
+title: "Fig.5 A multidimensional scaling plot of two method"
+author: "Tang Chao"
+date: "9/28/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Content
+[A. MDS plot of gene expression](#A)    
+
+
+```{r}
+stopifnot(is.element("ggstatsplot", installed.packages()))
+```
+
+## preparation
+
+```{r message=FALSE}
+suppressPackageStartupMessages(library(ggstatsplot))
+suppressPackageStartupMessages(library(data.table))
+gtf <- rtracklayer::readGFF("/mnt/raid61/Personal_data/tangchao/Document/gencode/human/GRCh37/gencode.v30lift37.annotation.gtf")
+gtf <- rtracklayer::readGFF("/mnt/raid61/Personal_data/tangchao/Document/gencode/human/GRCh37/gencode.v30lift37.annotation.gtf")
+setDT(gtf)
+gtf <- gtf[type %in% c("gene", "transcript"), .(seqid, type, start, end, strand, gene_id, gene_type, gene_name, transcript_id, transcript_type)]
+gtf[, gene_id:=substr(gene_id, 1, 15)]
+gtf[, transcript_id:=substr(transcript_id, 1, 15)]
+
+Gene_biotype <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Annotation/Gene_biotype.csv", header = F, select = 1:2)
+setkey(Gene_biotype, V1)
+
+gtf_gene <- gtf[type == "gene", ]
+gtf_gene$gene_biotype <- Gene_biotype[gtf_gene$gene_type, V2]
+setkey(gtf_gene, gene_id)
+
+gtf_tx <- gtf[type == "transcript", ]
+gtf_tx$transcript_biotype <- Gene_biotype[gtf_tx$transcript_type, V2]
+setkey(gtf_tx, transcript_id)
+
+suppressPackageStartupMessages(library(data.table))
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+## A. MDS plot of gene expression{#A}    
+
+### RSEM
+
+```{r message=FALSE}
+TPM_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/PolyA_RNA_TPM.txt.gz")
+TPM_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Total_RNA_TPM.txt.gz")
+
+TPM_PolyA <- data.frame(TPM_PolyA[, -1], row.names = TPM_PolyA[[1]])
+TPM_Total <- data.frame(TPM_Total[, -1], row.names = TPM_Total[[1]])
+```
+
+```{r}
+# stopifnot(identical(colnames(TPM_PolyA), SampInfo_PolyA$donor_id))
+# colnames(TPM_PolyA) <-  SampInfo_PolyA$ID
+# 
+# stopifnot(identical(colnames(TPM_Total), SampInfo_Total$donor_id))
+# colnames(TPM_Total) <-  SampInfo_Total$ID
+
+colnames(TPM_PolyA) <- paste("PolyA", colnames(TPM_PolyA), sep = "_")
+colnames(TPM_Total) <- paste("Total", colnames(TPM_Total), sep = "_")
+
+Gene_TPM <- merge(TPM_PolyA, TPM_Total, by = 0)
+Gene_TPM <- data.frame(Gene_TPM[, -1], row.names = Gene_TPM[[1]])
+Gene_TPM <- log1p(Gene_TPM)
+```
+
+```{r fig.width=12}
+suppressPackageStartupMessages(library(FactoMineR))
+suppressPackageStartupMessages(library(factoextra))
+suppressPackageStartupMessages(library(ggbeeswarm))
+suppressPackageStartupMessages(library(ggthemes))
+res.pca <- PCA(t(Gene_TPM), ncp = 10000, graph = F)
+```
+
+```{r}
+fviz_screeplot(res.pca, addlabels = TRUE) + 
+  theme(axis.title = element_text(size = 16), axis.text = element_text(size = 14)) -> p1
+```
+
+```{r}
+pca_raw_result <- data.frame(res.pca$ind$coord, 
+                             ID = colnames(Gene_TPM), 
+                             Library = mapply(function(x) x[1], strsplit(colnames(Gene_TPM), "_")))
+
+ggplot(pca_raw_result, aes(x = Dim.1, y = Dim.2, color = Library))+
+  geom_point(size=2)+ #Size and alpha just for fun
+  scale_color_manual(values = c(col.p, col.t))+ #your colors here
+  guides(color = FALSE)+
+  xlab(paste("Dim.1(",round(res.pca$eig[,2][1],2),"%)",sep = ""))+
+  ylab(paste("Dim.2(",round(res.pca$eig[,2][2],2),"%)",sep = ""))+
+  labs(title = "Individuals PCA") +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), legend.position = "none") -> p2
+```
+
+### HTSeq
+
+```{r warning=FALSE, message=FALSE}
+suppressPackageStartupMessages(library(GenomicAlignments))
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+suppressPackageStartupMessages(library(DESeq2))
+
+dds_PolyA <- DESeqDataSet(se_PolyA, design = ~ 1)
+dds_PolyA <- dds_PolyA[rowSums(counts(dds_PolyA) >= 10) >= .2*ncol(dds_PolyA), ]
+# nrow(dds_PolyA)
+dds_PolyA <- estimateSizeFactors(dds_PolyA)
+dds_PolyA <- estimateDispersions(dds_PolyA)
+
+dds_Total <- DESeqDataSet(se_Total, design = ~ 1)
+dds_Total <- dds_Total[rowSums(counts(dds_Total) >= 10) >= .2*ncol(dds_Total), ]
+# nrow(dds_Total)
+dds_Total <- estimateSizeFactors(dds_Total)
+dds_Total <- estimateDispersions(dds_Total)
+
+ExpMat_PolyA <- log1p(counts(dds_PolyA, normalized = TRUE))
+ExpMat_Total <- log1p(counts(dds_Total, normalized = TRUE))
+
+colnames(ExpMat_PolyA) <- paste("PolyA", gsub(".Aligned.sortedByCoord.out.bam", "", colnames(ExpMat_PolyA)), sep = "_")
+colnames(ExpMat_Total) <- paste("Total", gsub(".Aligned.sortedByCoord.out.bam", "", colnames(ExpMat_Total)), sep = "_")
+
+Gene_Exp <- merge(ExpMat_PolyA, ExpMat_Total, by = 0)
+Gene_Exp <- data.frame(Gene_Exp[, -1], row.names = Gene_Exp[[1]])
+```
+
+```{r}
+res.pca <- PCA(t(Gene_Exp), ncp = 10000, graph = F)
+```
+
+```{r}
+fviz_screeplot(res.pca, addlabels = TRUE) + 
+  theme(axis.title = element_text(size = 16), axis.text = element_text(size = 14)) -> p3
+```
+
+```{r}
+pca_raw_result <- data.frame(res.pca$ind$coord, 
+                             ID = colnames(Gene_Exp), 
+                             Library = mapply(function(x) x[1], strsplit(colnames(Gene_Exp), "_")))
+
+ggplot(pca_raw_result, aes(x = Dim.1, y = Dim.2, color = Library))+
+  geom_point(size=2)+ #Size and alpha just for fun
+  scale_color_manual(values = c(col.p, col.t))+ #your colors here
+  guides(color = FALSE)+
+  xlab(paste("Dim.1(",round(res.pca$eig[,2][1],2),"%)",sep = ""))+
+  ylab(paste("Dim.2(",round(res.pca$eig[,2][2],2),"%)",sep = ""))+
+  labs(title = "Individuals PCA") +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), legend.position = "none") -> p4
+```
+
+### ExonOnly
+```{r warning=FALSE, message=FALSE}
+Exon_PolyA <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_PolyA.txt")
+Exon_Total <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_Total.txt")
+
+dds_PolyA <- DESeqDataSetFromMatrix(countData = as.matrix(Exon_PolyA),
+                                    colData = data.frame(ID = colnames(Exon_PolyA), Library = "PolyA", row.names = colnames(Exon_PolyA)), 
+                                    design = ~ 1)
+dds_PolyA <- dds_PolyA[rowSums(counts(dds_PolyA) >= 10) >= .2*ncol(dds_PolyA), ]
+# nrow(dds_PolyA)
+dds_PolyA <- estimateSizeFactors(dds_PolyA)
+dds_PolyA <- estimateDispersions(dds_PolyA)
+
+dds_Total <- DESeqDataSetFromMatrix(countData = as.matrix(Exon_Total),
+                                    colData = data.frame(ID = colnames(Exon_Total), Library = "Total", row.names = colnames(Exon_Total)), 
+                                    design = ~ 1)
+dds_Total <- dds_Total[rowSums(counts(dds_Total) >= 10) >= .2*ncol(dds_Total), ]
+# nrow(dds_Total)
+dds_Total <- estimateSizeFactors(dds_Total)
+dds_Total <- estimateDispersions(dds_Total)
+
+ExpMat_PolyA <- log1p(counts(dds_PolyA, normalized = TRUE))
+ExpMat_Total <- log1p(counts(dds_Total, normalized = TRUE))
+
+colnames(ExpMat_PolyA) <- paste("PolyA", gsub(".Aligned.sortedByCoord.out.bam", "", colnames(ExpMat_PolyA)), sep = "_")
+colnames(ExpMat_Total) <- paste("Total", gsub(".Aligned.sortedByCoord.out.bam", "", colnames(ExpMat_Total)), sep = "_")
+
+Exon_Exp <- merge(ExpMat_PolyA, ExpMat_Total, by = 0)
+Exon_Exp <- data.frame(Exon_Exp[, -1], row.names = Exon_Exp[[1]])
+```
+
+```{r}
+res.pca <- PCA(t(Exon_Exp), ncp = 10000, graph = F)
+```
+
+```{r}
+fviz_screeplot(res.pca, addlabels = TRUE) + 
+  theme(axis.title = element_text(size = 16), axis.text = element_text(size = 14)) -> p5
+```
+
+```{r}
+pca_raw_result <- data.frame(res.pca$ind$coord, 
+                             ID = colnames(Gene_Exp), 
+                             Library = mapply(function(x) x[1], strsplit(colnames(Gene_Exp), "_")))
+
+ggplot(pca_raw_result, aes(x = Dim.1, y = Dim.2, color = Library))+
+  geom_point(size=2)+ #Size and alpha just for fun
+  scale_color_manual(values = c(col.p, col.t))+ #your colors here
+  guides(color = FALSE)+
+  xlab(paste("Dim.1(",round(res.pca$eig[,2][1],2),"%)",sep = ""))+
+  ylab(paste("Dim.2(",round(res.pca$eig[,2][2],2),"%)",sep = ""))+
+  labs(title = "Individuals PCA") +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(), 
+        panel.grid = element_line(colour = "grey90"), 
+        axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12), legend.position = "none") -> p6
+```
+
+```{r fig.height=15, fig.width=10}
+ggstatsplot::combine_plots(
+  p1 + labs(title = "RSEM"),
+  p2 + labs(title = "RSEM"),
+  p3 + labs(title = "HTSeq"),
+  p4 + labs(title = "HTSeq"),
+  p5 + labs(title = "ExonOnly"),
+  p6 + labs(title = "ExonOnly"),
+  ncol = 2, 
+  labels = c("(a)", "(b)", "(c)", "(d)", "(e)", "(f)")
+  # title.text = "HTSeq identified gene",
+  # caption.text = "raw counts >= 10",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+
+
+
+
+
+

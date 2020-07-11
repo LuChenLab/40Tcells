@@ -1,0 +1,159 @@
+---
+title: "Fig.3 Comparison of identified genes and transcripts"
+author: "Chao Tang"
+date: "9/25/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, fig.align='center')
+```
+
+## Preparation
+```{r}
+library(data.table)
+suppressPackageStartupMessages(library(GenomicAlignments))
+suppressPackageStartupMessages(library(ggpmisc))
+suppressPackageStartupMessages(library(ggpubr))
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+## Correlation of different method quantification
+#### RSEM
+```{r}
+# loading PolyA RNA
+setwd("/mnt/raid62/Chen_Cell_2016/RSEM/EGAD00001002671")
+files_PolyA <- paste(SampInfo_PolyA$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_PolyA)))
+Gene_PolyA <- lapply(files_PolyA, fread, select = c(1, 5, 6))
+
+# filtering
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_PolyA <- lapply(Gene_PolyA, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+# PolyA_gene <- unique(substr(do.call(rbind, Gene_PolyA)[[1]], 1, 15))
+
+# loading Total RNA
+files_Total <- paste(SampInfo_Total$ID , ".genes.results", sep = "")
+stopifnot(all(file.exists(files_Total)))
+Gene_Total <- lapply(files_Total, fread, select = c(1, 5, 6))
+
+# filtering
+Gene_Total <- lapply(Gene_Total, function(x) {x[expected_count >= 6 & TPM >= 0.1, ]})
+Gene_Total <- lapply(Gene_Total, function(x) {x[, gene_id:=substr(gene_id, 1, 15)]})
+# Total_gene <- unique(substr(do.call(rbind, Gene_Total)[[1]], 1, 15))
+```
+
+```{r}
+stopifnot(identical(SampInfo_PolyA$donor_id, SampInfo_Total$donor_id))
+Gene_TPM <- list()
+for(i in 1:40){
+  tmp <- merge(Gene_PolyA[[i]][, c(1, 3)], Gene_Total[[i]][, c(1, 3)], by = "gene_id")
+  colnames(tmp)[2:3] <- c("PolyA", "Total")
+  Gene_TPM[[i]] <- tmp
+}
+
+gene_cor_RSEM <- mapply(Gene_TPM, FUN = function(x) cor(log1p(x[[2]]), log1p(x[[3]])))
+```
+
+#### HTSeq
+```{r warning=FALSE, message=FALSE}
+suppressPackageStartupMessages(library(GenomicAlignments))
+load(file = "/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/se.RData")
+suppressPackageStartupMessages(library(DESeq2))
+
+colnames(se_PolyA) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(se_PolyA))
+colnames(se_Total) <- gsub(".Aligned.sortedByCoord.out.bam", "", colnames(se_Total))
+stopifnot(identical(colnames(se_PolyA), SampInfo_PolyA$ID))
+stopifnot(identical(colnames(se_Total), SampInfo_Total$ID))
+
+gene_cor_HTSeq <- vector()
+for(i in 1:40) {
+  se <- cbind(se_PolyA[,i], se_Total[,i])
+  dds <- DESeqDataSet(se, design = ~ 1)
+  dds <- dds[rowSums(counts(dds) >= 10) == 2, ]
+  dds <- estimateSizeFactors(dds)
+  dds <- estimateDispersions(dds)
+
+  ExpMat <- log1p(counts(dds, normalized = TRUE))
+  gene_cor_HTSeq[i] <- cor(ExpMat[,1], ExpMat[,2])
+}
+```
+
+#### ExonOnly
+```{r warning=FALSE, message=FALSE}
+Exon_PolyA <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_PolyA.txt")
+Exon_Total <- read.table("/mnt/raid61/Personal_data/tangchao/ScientificData/data/Phenotype/gene/Gene_Count_Only_Exon_Total.txt")
+Exon_PolyA <- Exon_PolyA[, SampInfo_PolyA$ID]
+Exon_Total <- Exon_Total[, SampInfo_Total$ID]
+
+stopifnot(identical(colnames(Exon_PolyA), SampInfo_PolyA$ID))
+stopifnot(identical(colnames(Exon_Total), SampInfo_Total$ID))
+stopifnot(identical(row.names(Exon_PolyA), row.names(Exon_Total)))
+
+gene_cor_ExonOnly <- vector()
+for(i in 1:40) {
+  se <- cbind(Exon_PolyA[,i], Exon_Total[,i])
+  dds <- DESeqDataSetFromMatrix(countData = as.matrix(se), colData = data.frame(Lib = c("PolyA", "Total")), design = ~ 1)
+  dds <- dds[rowSums(counts(dds) >= 10) == 2, ]
+  dds <- estimateSizeFactors(dds)
+  dds <- estimateDispersions(dds)
+
+  ExpMat <- log1p(counts(dds, normalized = TRUE))
+  gene_cor_ExonOnly[i] <- cor(ExpMat[,1], ExpMat[,2])
+}
+```
+
+plot
+```{r}
+Mat <- data.frame(R = c(gene_cor_RSEM, gene_cor_HTSeq, gene_cor_ExonOnly), Method = rep(c("RSEM", "HTSeq", "ExonOnly"), each = 40))
+Mat$Method <- factor(Mat$Method, levels = c("RSEM", "HTSeq", "ExonOnly"))
+
+ggplot(Mat, aes(x = Method, y = R, fill = Method))+
+  geom_violin(alpha = .5)+
+  geom_boxplot(fill = "white", width = .2)+
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        axis.ticks.x = element_blank())+
+  theme_classic() +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5)
+
+my_comparisons = list(c("RSEM", "HTSeq"), c("HTSeq", "ExonOnly"), c("RSEM", "ExonOnly"))
+ggplot(Mat, aes(x = Method, y = R, fill = Method))+
+  geom_violin(alpha = .5)+
+  geom_boxplot(fill = "white", width = .2)+
+  theme(axis.title = element_text(size = 22), 
+        axis.text.y = element_text(size = 16), 
+        axis.text.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        axis.ticks.x = element_blank())+
+  theme_classic() +
+  ggbeeswarm::geom_quasirandom(size = 1, alpha = .5)+
+  stat_compare_means(label = "p.format", comparisons = my_comparisons)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

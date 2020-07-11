@@ -1,0 +1,334 @@
+---
+title: "Fig.3 Comparison of identified genes and transcripts"
+author: "Chao Tang"
+date: "9/25/2019"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, fig.align='center', message = FALSE)
+```
+
+## Preparation
+```{r}
+library(data.table)
+suppressPackageStartupMessages(library(ggstatsplot))
+suppressPackageStartupMessages(library(GenomicAlignments))
+suppressPackageStartupMessages(library(ggpmisc))
+suppressPackageStartupMessages(library(ggpubr))
+col.p <- "#00AFBB"
+col.t <- "#E7B800"
+
+SampInfo_PolyA <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/PolyA_RNA_sampleInfo.txt")
+SampInfo_Total <- fread("/mnt/raid61/Personal_data/tangchao/ScientificData/data/SampleInfo/Total_RNA_sampleInfo.txt")
+```
+
+```{r}
+# Total 
+Files <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_Total$ID , ".SJ.out.tab", sep = "")
+stopifnot(all(file.exists(Files)))
+
+library(GenomicAlignments)
+mclapply(Files, function(x) {
+  sj <- fread(x, stringsAsFactors = F)
+  sj <- sj[V7 > 0 & V9 >= 3, 1:7]
+  colnames(sj) <- c("seqnames", "start", "end", "strand", "intron_motif", "annotation", "um_reads")
+  sj[, strand:=ifelse(strand == 1, "+", ifelse(strand == 2, "-", "*"))]
+  sj[, intron_motif:=ifelse(intron_motif %in% 1:2 , "GT-AG", ifelse(intron_motif %in% 3:4, "GC-AG", ifelse(intron_motif %in% 5:6, "AT-AC", "*")))]
+  setkey(sj, seqnames, start, end, strand)
+  return(sj)
+}, mc.cores = 16) -> SJ_list_Total
+
+all.sj_Total <- unique(do.call(rbind, lapply(SJ_list_Total, function(x) x[, 1:6])))
+
+# PolyA 
+Files <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_PolyA$ID , ".SJ.out.tab", sep = "")
+stopifnot(all(file.exists(Files)))
+
+mclapply(Files, function(x) {
+  sj <- fread(x)
+  sj <- sj[V7 > 0 & V9 >= 3, 1:7]
+  colnames(sj) <- c("seqnames", "start", "end", "strand", "intron_motif", "annotation", "um_reads")
+  sj[, strand:=ifelse(strand == 1, "+", ifelse(strand == 2, "-", "*"))]
+  sj[, intron_motif:=ifelse(intron_motif %in% 1:2 , "GT-AG", ifelse(intron_motif %in% 3:4, "GC-AG", ifelse(intron_motif %in% 5:6, "AT-AC", "*")))]
+  setkey(sj, seqnames, start, end, strand)
+  return(sj)
+}, mc.cores = 16) -> SJ_list_PolyA
+all.sj_PolyA <- unique(do.call(rbind, lapply(SJ_list_PolyA, function(x) x[, 1:6])))
+```
+
+```{r}
+Mat <- rbind(data.frame(SJ = mapply(nrow, SJ_list_PolyA), Library = "PolyA"), data.frame(SJ = mapply(nrow, SJ_list_Total), Library = "Total"))
+
+library(ggpubr)
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "SJ", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot",
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. spice junctions") -> p1
+```
+
+```{r}
+files_PolyA <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_PolyA$ID , ".Log.final.out", sep = "")
+files_Total <- paste("/mnt/raid62/Chen_Cell_2016/EGAD00001002671_bam/", SampInfo_Total$ID , ".Log.final.out", sep = "")
+
+Mat <- rbind(data.frame(SJ = as.numeric(mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2])), files_PolyA)), Library = "PolyA"), 
+             data.frame(SJ = as.numeric(mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2])), files_Total)), Library = "Total"))
+
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "SJ", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot",
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "No. spice junction reads") -> p2
+```
+
+```{r}
+SJ_Perc_PolyA <- mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2]))/as.numeric(as.character(read.delim(x, header = F)[5, 2])), files_PolyA)
+SJ_Perc_Total <- mapply(function(x) as.numeric(as.character(read.delim(x, header = F)[11, 2]))/as.numeric(as.character(read.delim(x, header = F)[5, 2])), files_Total)
+
+Mat <- rbind(data.frame(SJ = SJ_Perc_PolyA*100, Library = "PolyA"), data.frame(SJ = SJ_Perc_Total*100, Library = "Total"))
+
+my_comparisons = list(c("PolyA", "Total"))
+ggviolin(Mat, x = "Library", y = "SJ", fill = "Library",
+         palette = c(col.p, col.t),
+         add = "boxplot",
+         add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.x.npc = "center")+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16))+
+  labs(y = "Percentage of splice junction reads") -> p3
+```
+
+```{r fig.width=15, fig.height=5}
+ggstatsplot::combine_plots(
+  p1,
+  p2,
+  p3,
+  ncol = 3,
+  labels = c("(a)", "(b)", "(c)")
+  # title.text = "RSEM identified gene",
+  # caption.text = "expected_count >= 6 & TPM >= 0.1",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+```{r}
+intron_motif <- rbind(data.frame(reshape2::melt(mapply(function(x) table(x$intron_motif)/nrow(x)*100, SJ_list_PolyA)), Library = "PolyA"), 
+                      data.frame(reshape2::melt(mapply(function(x) table(x$intron_motif)/nrow(x)*100, SJ_list_Total)), Library = "Total"))
+
+suppressPackageStartupMessages(library(plyr))
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func, varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+df2 <- data_summary(intron_motif, varname="value", groupnames=c("Library", "Var1"))
+```
+
+```{r}
+ggplot(df2, aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Intron motif", y = "Percentage")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12)) -> p
+
+tmp <- with(intron_motif, by(intron_motif, Var1, function(x) t.test(value ~ Library, data = x)))
+lab <- signif(sapply(tmp, function(x) x$p.value), 2)
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))) * .03
+
+
+p + ggplot2::annotate("text", x = 1:4,
+                    y = y0, 
+                    label = lab) -> p5
+
+plevel <- function(x) {
+  if(x < 1e-04) {
+    "****"
+  } else {
+    if(x < 0.001) {
+      "***"
+    } else {
+      if(x < 0.01) {
+        "**"
+      } else {
+        if(x < 0.05) {
+          "*"
+        } else {
+          "ns"
+        }
+      }
+    }
+  }
+}
+# sapply(lab, plevel)
+# p + ggplot2::annotate("text", x = 1:4, y = y0, label = sapply(lab, plevel))
+
+y0 = as.vector(by(df2$value + df2$sd, factor(df2$Var1), max)) + 
+  max(as.vector(by(df2$value + df2$sd, factor(df2$Var1), max))[1:3]) * .03
+
+
+ggplot(df2[df2$Var1 != "GT-AG", ], aes(x=Var1, y=value, fill=Library)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Intron motif", y = "Percentage")+
+  theme_classic() +
+  scale_fill_manual(values=c(col.p, col.t))+
+  guides(fill = FALSE)+
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12)) + 
+  ggplot2::annotate("text", x = 1:3,
+                    y = y0[1:3], 
+                    label = lab[1:3]) -> p6
+
+```
+
+```{r fig.width=8, fig.height=4}
+ggstatsplot::combine_plots(
+  p5,
+  p6,
+  ncol = 2,
+  labels = c("(a)", "(b)")
+  # title.text = "RSEM identified gene",
+  # caption.text = "expected_count >= 6 & TPM >= 0.1",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+```{r}
+all.sj_PolyA[, sj:=paste(seqnames, ":", start, "-", end, ":", strand, sep = "")]
+all.sj_Total[, sj:=paste(seqnames, ":", start, "-", end, ":", strand, sep = "")]
+
+input = list(PolyA = all.sj_PolyA[, sj], Total = all.sj_Total[, sj])
+
+lab1 <- paste(sum(!input[[1]] %in% input[[2]]), "\n(", round(mean(!input[[1]] %in% input[[2]]) * 100, 2), "%)", sep = "")
+lab2 <- length(intersect(input[[1]], input[[2]]))
+lab3 <- paste(sum(!input[[2]] %in% input[[1]]), "\n(", round(mean(!input[[2]] %in% input[[1]]) * 100, 2), "%)", sep = "")
+
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(ggforce))
+suppressPackageStartupMessages(library(cowplot))
+ggplot() + 
+  geom_circle(aes(x0 = c(-1, 1),
+                           y0 = c(0, 0),
+                           r = c(2, 2),
+                           color = c(col.p, col.t),
+                           fill = c(col.p, col.t)),
+                       lwd = 1.5,
+                       alpha = .1) +
+  guides(color = F, fill = F, alpha = F) +
+  scale_fill_manual(values = c(col.p, col.t)) +
+  scale_color_manual(values = c(col.p, col.t)) +
+  theme_nothing() +
+  ggplot2::annotate("text", x = c(-2, 0, 2), y = 0, label = c(lab1, lab2, lab3), size = 4) +
+  ggplot2::annotate("text", x = c(-1, 1), y = 2.2, label = names(input), size = 6) -> p4
+```
+
+```{r}
+df <- rbind(data.frame(table(all.sj_PolyA[!sj %in% all.sj_Total$sj, ]$intron_motif)/sum(table(all.sj_PolyA[!sj %in% all.sj_Total$sj, ]$intron_motif)), Type = "PolyA_Only"),
+            data.frame(table(all.sj_PolyA[sj %in% all.sj_Total$sj, ]$intron_motif)/sum(table(all.sj_PolyA[sj %in% all.sj_Total$sj, ]$intron_motif)), Type = "Common"),
+            data.frame(table(all.sj_Total[!sj %in% all.sj_PolyA$sj, ]$intron_motif)/sum(table(all.sj_Total[!sj %in% all.sj_PolyA$sj, ]$intron_motif)), Type = "Total_Only"))
+df$Type <- factor(df$Type, levels = c("PolyA_Only", "Common", "Total_Only"))
+df$Type <- factor(df$Type, levels = c("PolyA_Only", "Common", "Total_Only"))
+df$Freq <- df$Freq*100
+
+ggplot(df, aes(x=Var1, y=Freq, fill=Type)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage")+
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12)) -> p7
+
+
+p7 + annotate(geom = "text", x = sort(ggplot_build(p7)$data[[1]]$x), y = df[order(df$Var1), ]$Freq + 3, label = round(df[order(df$Var1), ]$Freq, 2)) -> p8
+
+
+df <- subset(df, Var1 != "GT-AG")
+
+ggplot(df, aes(x=Var1, y=Freq, fill=Type)) + 
+  geom_bar(stat="identity", color="black", 
+           position=position_dodge()) +
+  labs(x = "", y = "Percentage")+
+  theme_classic() +
+  theme(axis.title = element_text(size = 16), 
+        axis.text = element_text(size = 12)) -> p9
+
+
+p9 + annotate(geom = "text", x = sort(ggplot_build(p9)$data[[1]]$x), y = df[order(df$Var1), ]$Freq + .3, label = round(df[order(df$Var1), ]$Freq, 2)) -> p10
+```
+
+```{r fig.width=16, fig.height=4}
+ggstatsplot::combine_plots(
+  p4,
+  p8 + guides(fill = F),
+  p10, 
+  ncol = 3,
+  labels = c("(a)", "(b)", "(c)")
+  # title.text = "RSEM identified gene",
+  # caption.text = "expected_count >= 6 & TPM >= 0.1",
+  # title.color = "red",
+  # caption.color = "blue"
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
