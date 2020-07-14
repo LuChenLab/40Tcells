@@ -1,25 +1,15 @@
-## A Paired rRNA-depleted and polyA-selected RNA sequencing from primary CD4 T cell of 40 healthy individuals with multi-omics data
+## Paired rRNA-depleted and polyA-selected RNA-seq from primary T cell of 40 human samples with multi-omics data
 
-### Outline
+## Abstract
 
-##### Fig.1 Flow Chart of the RNA-seq experiment and data analysis
-##### Fig.2 Summary of key quality control metrics
+​    Both Poly(A) enrichment and ribosomal RNA depletion are commonly used for RNA sequencing. Either has its advantages and disadvantages that may lead to biases in the downstream analyses. To better access these effects, we carried out both ribosomal RNA-depleted and PolyA-selected RNA-Seq for CD4+ T naive cells isolated from 40 healthy individuals from the Blueprint Project. For these 40 individuals, the genomic and epigenetic data were also available. This dataset offers a unique opportunity to understand how library construction influences differential gene expression, alternative splicing and molecular QTL (quantitative loci) analyses for human primary cells.
 
-A. fastQC
 
-B. Summary of read-mapping
 
-C. Reads distribution along gene body
+**Figure 1.** Study design of paired Poly(A) enrichment and ribosomal RNA deletion RNA-sequencing.
 
-##### Fig.3 Gene expression quantification
+**Figure 2.** Summary of key quality control metrics. 
 
-A. Correlation of different method quantification
-B. The correlation of different method quantification from one of the same samples
-C. Identified gene number
-D. Identified gene biotype
+**Figure 3.** Comparison of gene expression identification between PolyA-selected and rRNA-depletion. 
 
-##### Fig.4 Unsupervised clustering analysis of ExonOnly quantification
-
-A. PCA of the data profiles in the three cell types of the Blueprint project revealed
-B. The clustering dendrogram of the samples corrected batch by ComBat
-
+**Figure 4.** Unsupervised clustering analysis. 
